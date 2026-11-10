@@ -33,6 +33,27 @@ curl http://localhost:8081/api/estado
 # {"sensoresTotales":12,"sensoresActivos":12,...}
 ```
 
+### URLs del sistema
+
+| URL | Qué es |
+|---|---|
+| **http://localhost:8080** | **Tablero React (entrada al sistema)**: sidebar, gráficas, control de fallas |
+| `http://localhost:8081/api/...` | API REST directa, para `curl` / Postman |
+| `http://localhost:8081/` | Redirige al tablero (ya no aparece la página Whitelabel de error) |
+
+Una ruta inexistente responde **404** con el formato que pida el cliente:
+
+- `curl` / `fetch` (`Accept: */*`) → JSON:
+  `{"timestamp":"…","status":404,"error":"Not Found","path":"/api/noexiste"}`
+- Navegador (`Accept: text/html`) → página legible con la ruta pedida y los
+  endpoints disponibles.
+
+Para diagnosticar qué se pidió (y desde cuándo), el access log del backend:
+
+```bash
+docker exec campusiot-backend sh -c "tail -f /tmp/access_log.*.log"
+```
+
 ## Mapa de topics MQTT (Tablas 33/35 del documento)
 
 | Topic | Publica | Escucha |
