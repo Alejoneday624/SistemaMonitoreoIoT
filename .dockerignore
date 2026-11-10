@@ -1,0 +1,18 @@
+# Artefactos y dependencias
+node_modules/
+target/
+dist/
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Control de versiones y editores
+.git/
+.gitignore
+.idea/
+*.iml
+
+# Documentación
+README.md
+HELP.md

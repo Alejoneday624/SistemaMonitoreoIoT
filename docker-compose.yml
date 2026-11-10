@@ -1,0 +1,79 @@
+services:
+  # ---------------------------------------------------------------
+  # Base de datos PostgreSQL (persistente, sin puerto público)
+  # ---------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: campusiot-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-campusiot}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-campusiot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Broker MQTT (estilo Pub/Sus — decisiones E4/E9/E11 del documento)
+  # ---------------------------------------------------------------
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: campusiot-mosquitto
+    ports:
+      - "1883:1883"   # solo para inspección con mosquitto_sub en la demo
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t healthcheck -m ok || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Backend Spring Boot (API + conexión a la base de datos)
+  # ---------------------------------------------------------------
+  backend:
+    build: ./backend
+    container_name: campusiot-backend
+    environment:
+      # Base de datos: por defecto el servicio `db` local. Para usar Supabase
+      # (u otra base) basta con definir SPRING_DATASOURCE_* en el archivo .env
+      # sin tocar este fichero.
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL:-jdbc:postgresql://db:5432/${POSTGRES_DB:-campusiot}}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-${POSTGRES_USER:-postgres}}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-${POSTGRES_PASSWORD:-postgres}}
+      MQTT_URL: tcp://mosquitto:1883
+    ports:
+      - "8081:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      mosquitto:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------
+  # Frontend React (build de Vite servido por nginx)
+  # nginx hace de proxy inverso hacia el backend (/api/ y /actuator/)
+  # ---------------------------------------------------------------
+  frontend:
+    build: ./frontend
+    container_name: campusiot-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  mosquitto-data:
