@@ -32,6 +32,12 @@ cd "$APP_DIR"
 echo "==> Actualizando codigo (git pull)..."
 git pull --ff-only
 
+echo "==> Liberando espacio (cache de build e imagenes huerfanas)..."
+# En el disco de8 GB la caché de builds acumulada puede llenarlo y romper
+# el rebuild (lección real: "no space left on device"). Se limpia antes.
+docker builder prune -f --keep-storage 500M >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
+
 echo "==> Reconstruyendo y levantando solo lo cambiado..."
 docker compose up -d --build
 
