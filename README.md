@@ -250,17 +250,20 @@ cd /opt/sistemamonitoreoiot
 sudo git pull --ff-only && sudo docker compose up -d --build
 ```
 
-### Frecuencia del simulador: preparación vs. demo
+### Frecuencia del simulador
 
-- Por defecto el simulador genera datos **cada hora**
-  (`SENSOR_FRECUENCIA_MS=3600000`) para que el disco de8 GB no crezca
-  mientras se prepara la presentación (la retención de30 días hace el resto).
-- **El día antes de la presentación**, en la instancia:
+- Por defecto el simulador genera datos **cada 5 segundos**
+  (`SENSOR_FRECUENCIA_MS=5000`): el tablero siempre se ve vivo. La retención
+  de 30 días acota el disco (~40-60 MB por día encendido, techo ~1-2 GB) y
+  **apagar la instancia (Stop) corta la generación por completo**: cuando
+  se vuelve a encender, todo sigue donde estaba (los datos viven en
+  volúmenes EBS).
+- Para frenarlo en cualquier momento (sin rebuild), en la instancia:
 
 ```bash
 cd /opt/sistemamonitoreoiot
-echo 'SENSOR_FRECUENCIA_MS=5000' >> .env
-sudo docker compose up -d    # recrea solo el backend, ~10 s, sin rebuild
+echo 'SENSOR_FRECUENCIA_MS=3600000' >> .env
+sudo docker compose up -d    # recrea solo el backend, ~10 s
 ```
 
 ### Por qué nada se pierde en AWS
