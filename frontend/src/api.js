@@ -1,11 +1,21 @@
 /**
  * Capa de acceso a la API del tablero.
- * En Docker las rutas las resuelve nginx (/api -> backend); en desarrollo
- * local con `npm run dev` las resuelve el proxy de vite.config.js.
+ *
+ * Tres escenarios, sin cambiar el codigo de los componentes:
+ * - Docker: nginx resuelve /api -> backend (relojava con la ruta relativa).
+ * - `npm run dev` (Vite): el proxy de vite.config.js resuelve /api -> :8081.
+ * - Vercel: la ruta relativa /api la reescribe vercel.json hacia Render.
+ *
+ * Alternativa (si prefieres llamar al backend EN ABSOLUTO, p.ej. sin
+ * rewrites): define VITE_API_URL=https://TU-BACKEND.onrender.com en el
+ * entorno de Vercel y las peticiones van directas a ese host (en ese caso
+ * el backend debe permitir el origen con panel.cors-origins).
  */
 
+const BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+
 async function get(ruta) {
-  const res = await fetch(ruta)
+  const res = await fetch(`${BASE}${ruta}`)
   if (!res.ok) {
     throw new Error(`API ${ruta} respondio ${res.status}`)
   }
@@ -43,10 +53,10 @@ export function fetchErrores(tipo) {
 //   POST /api/demo/restaurar -> reactiva todo lo apagado
 //
 // export function panic() {
-//   return fetch('/api/demo/panic', { method: 'POST' }).then((r) => r.json())
+//   return fetch(`${BASE}/api/demo/panic`, { method: 'POST' }).then((r) => r.json())
 // }
 //
 // export function restaurar() {
-//   return fetch('/api/demo/restaurar', { method: 'POST' }).then((r) => r.json())
+//   return fetch(`${BASE}/api/demo/restaurar`, { method: 'POST' }).then((r) => r.json())
 // }
 // ---------------------------------------------------------------------------

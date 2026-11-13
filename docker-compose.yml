@@ -69,7 +69,9 @@ services:
     build: ./frontend
     container_name: campusiot-frontend
     ports:
-      - "8080:80"
+      # WEB_PORT=8080 por defecto (local); en AWS el .env pone WEB_PORT=80
+      # para que el tablero quede en http://IP-PUBLICA sin puerto.
+      - "${WEB_PORT:-8080}:80"
     depends_on:
       - backend
     restart: unless-stopped
