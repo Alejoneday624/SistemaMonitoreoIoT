@@ -21,4 +21,9 @@ public interface MedicionRepository extends JpaRepository<Medicion, Long> {
     List<Medicion> findTop1BySensorIdOrderByFechaDesc(String sensorId);
 
     long countByFechaAfter(Instant desde);
+
+    /** Para la retencion: cuanto/que supera el umbral de dias */
+    long countByFechaBefore(Instant corte);
+
+    void deleteByFechaBefore(Instant corte);
 }

@@ -235,10 +235,32 @@ Si algo falló, el detalle está en `/var/log/cloud-init-output.log`.
 
 ### Actualizaciones
 
+Un solo comando — baja los últimos cambios del repo y reconstruye **solo lo
+que cambió** (los datos nunca se tocan):
+
 ```bash
 ssh -i campusiot.pem ubuntu@<IP-PUBLICA>
+curl -fsSL https://raw.githubusercontent.com/Alejoneday624/SistemaMonitoreoIoT/main/deploy/actualizar.sh | sudo bash
+```
+
+Equivalente manual:
+
+```bash
 cd /opt/sistemamonitoreoiot
-git pull && docker compose up -d --build
+sudo git pull --ff-only && sudo docker compose up -d --build
+```
+
+### Frecuencia del simulador: preparación vs. demo
+
+- Por defecto el simulador genera datos **cada hora**
+  (`SENSOR_FRECUENCIA_MS=3600000`) para que el disco de8 GB no crezca
+  mientras se prepara la presentación (la retención de30 días hace el resto).
+- **El día antes de la presentación**, en la instancia:
+
+```bash
+cd /opt/sistemamonitoreoiot
+echo 'SENSOR_FRECUENCIA_MS=5000' >> .env
+sudo docker compose up -d    # recrea solo el backend, ~10 s, sin rebuild
 ```
 
 ### Por qué nada se pierde en AWS

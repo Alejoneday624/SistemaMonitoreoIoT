@@ -52,6 +52,9 @@ services:
       SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME:-${POSTGRES_USER:-postgres}}
       SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD:-${POSTGRES_PASSWORD:-postgres}}
       MQTT_URL: tcp://mosquitto:1883
+      # Frecuencia del simulador: por defecto1 hora; para la demo se pone
+      # SENSOR_FRECUENCIA_MS=5000 en .env y `docker compose up -d` (sin rebuild)
+      SENSOR_FRECUENCIA_MS: ${SENSOR_FRECUENCIA_MS:-3600000}
     ports:
       - "8081:8080"
     depends_on:
