@@ -79,6 +79,9 @@ public class MqttBus implements InitializingBean, DisposableBean {
     private final ColaService cola;
     private final int reintentosMax;
 
+    /** Caida simulada del broker (panel de control de fallas) */
+    private volatile boolean brokerCaido = false;
+
     private final ConcurrentMap<String, MqttClient> clientes = new ConcurrentHashMap<>();
     /** Un hilo secuencial por cliente: conserva el orden y libera a Paho */
     private final ConcurrentMap<String, ExecutorService> ejecutores = new ConcurrentHashMap<>();
@@ -173,6 +176,11 @@ public class MqttBus implements InitializingBean, DisposableBean {
      *         cuyo caso el mensaje sigue en cola.
      */
     private boolean publicarDirecto(String topic, String payload) {
+        if (brokerCaido) {
+            // Broker caido a proposito (demo): no hay confirmacion posible,
+            // el mensaje queda en la cola de salida hasta restaurar.
+            return false;
+        }
         MqttClient emisor = clientes.get("campus-emisor");
         if (emisor == null || !emisor.isConnected()) {
             return false;
@@ -521,5 +529,29 @@ public class MqttBus implements InitializingBean, DisposableBean {
 
     /** Suscripcion registrada en el bus (clienteId, filtro topic, manejador) */
     private record Suscripcion(String clienteId, String topic, BiConsumer<String, String> manejador) {
+    }
+
+    // ------------------------------------------------------------ demo de fallas
+
+    /**
+     * Simula la caida del broker: publicarDirecto deja de confirmar (como si
+     * no hubiera PUBACK), asi que TODO se acumula en la cola de salida (outbox)
+     * y ningun mensaje llega a los suscriptores. Al restaurar, drenarColas()
+     * lo vacia en orden FIFO.
+     */
+    public void caerBroker() {
+        brokerCaido = true;
+        log.warn("[MQTT] Broker CAIDO por orden del panel: "
+                + "la cola de salida acumula las publicaciones hasta restaurar");
+    }
+
+    /** Restaura el broker: el proximo tick drena la cola de salida */
+    public void levantarBroker() {
+        brokerCaido = false;
+        log.info("[MQTT] Broker restaurado: reanudando las publicaciones");
+    }
+
+    public boolean estaCaido() {
+        return brokerCaido;
     }
 }

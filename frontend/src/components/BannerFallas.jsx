@@ -3,6 +3,14 @@ import { fetchDemoEstado, restaurar } from '../api.js'
 
 const INTERVALO_MS = 5000
 
+/** Nombres legibles de cada servicio para el banner */
+const NOMBRE_SERVICIO = {
+  RECEPCION: 'Recepción',
+  PROCESAMIENTO: 'Procesamiento',
+  PERSISTENCIA: 'Base de datos',
+  MQTT: 'Broker MQTT',
+}
+
 function antiguedad(segundos) {
   if (segundos == null) return ''
   if (segundos < 60) return `hace ${segundos} s`
@@ -11,10 +19,10 @@ function antiguedad(segundos) {
 }
 
 /**
- * Banner global de fallas (E1, E11): se monta en App.jsx y se ve en TODAS
- * las secciones. Mientras la ruleta tenga algo caido muestra:
- *   - SENSOR     -> "Sensor caido: TMP-SUR-01 — sin datos hace X — reintentando"
- *   - COMPONENTE -> "Componente caido: Procesamiento — cola: N mensajes — reintentando"
+ * Banner global de fallas: se monta en App.jsx y se ve en TODAS las
+ * secciones. Mientras la ruleta tenga algo caido muestra:
+ *   - SENSOR   -> "Sensor caido: TMP-SUR-01 — sin datos hace X — reintentando"
+ *   - SERVICIO -> "Caido: Procesamiento — cola: N mensajes — reintentando"
  * con el contador de cola creciendo y el boton para restaurar.
  */
 function BannerFallas() {
@@ -60,7 +68,7 @@ function BannerFallas() {
   const esSensor = estado.tipo === 'SENSOR'
   const titulo = esSensor
     ? `Sensor caido: ${estado.victima}`
-    : `Componente caido: ${estado.victima || 'Procesamiento'}`
+    : `Caido: ${NOMBRE_SERVICIO[estado.tipo] || estado.victima || 'servicio'}`
   const detalle = esSensor
     ? `sin datos ${antiguedad(estado.segundosCaido)}`
     : `cola: ${estado.colaPendiente} mensaje(s)`

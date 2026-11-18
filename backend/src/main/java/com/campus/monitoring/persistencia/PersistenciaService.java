@@ -10,6 +10,7 @@ import org.springframework.context.event.EventListener;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 
+import com.campus.monitoring.config.ComponenteCaidoException;
 import com.campus.monitoring.config.MqttBus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +23,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *
  * El duplicado (sensor + fecha) lo rechaza la restriccion unica de la BD;
  * aqui se captura para que no rompa el flujo (HDU-03).
+ *
+ * DEMO DE FALLAS: el flag "bdCaida" simula la caida de la base de datos.
+ * Mientras este activo, guardarMedicion lanza ComponenteCaidoException antes
+ * de tocar JPA: los mensajes quedan PENDIENTES en la cola de entrada (sin
+ * gastar reintentos) hasta que el panel restaure; ningun dato se pierde.
  */
 @Component
 public class PersistenciaService {
@@ -33,6 +39,9 @@ public class PersistenciaService {
     private final ErrorRegistroRepository errores;
     private final SensorRepository sensores;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** Caida simulada de la base de datos (panel de control de fallas) */
+    private volatile boolean bdCaida = false;
 
     public PersistenciaService(MqttBus mqtt, MedicionRepository mediciones,
                                ErrorRegistroRepository errores, SensorRepository sensores) {
@@ -50,6 +59,11 @@ public class PersistenciaService {
     }
 
     private void guardarMedicion(String topic, String mensaje) {
+        if (bdCaida) {
+            // Base de datos fuera de servicio: el bus deja el mensaje
+            // PENDIENTE y reintenta en el proximo tick (ver MqttBus).
+            throw new ComponenteCaidoException("base-de-datos");
+        }
         try {
             JsonNode n = json.readTree(mensaje);
             Instant recibida = Instant.now();
@@ -127,6 +141,23 @@ public class PersistenciaService {
         } catch (Exception ignored) {
             // no publicar errores de errores
         }
+    }
+
+    /** Simula la caida de la base de datos: nada se guarda, la cola crece */
+    public void caer() {
+        bdCaida = true;
+        log.warn("[PERSISTENCIA] Base de datos CAIDA por orden del panel: "
+                + "las mediciones se acumulan en cola hasta restaurar");
+    }
+
+    /** Restaura la base de datos: el proximo tick vacia la cola pendiente */
+    public void levantar() {
+        bdCaida = false;
+        log.info("[PERSISTENCIA] Base de datos restaurada: reanudando el guardado");
+    }
+
+    public boolean estaCaida() {
+        return bdCaida;
     }
 
     /** Diagnostico rapido para el panel */

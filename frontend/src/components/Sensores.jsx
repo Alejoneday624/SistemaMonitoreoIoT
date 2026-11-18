@@ -31,10 +31,10 @@ function antiguedad(segundos) {
 
 /**
  * Tabla de sensores con:
- *  - Estado en vivo (activo / apagado / desactualizado, HDU-01)
- *  - Toggle apagar/encender por sensor (HDU-05)
- *  - CRUD completo (modificabilidad): crear, editar y eliminar un sensor
- *    SIN tocar codigo — el simulador lo lee de la BD en el proximo ciclo.
+ *  - Estado en vivo (activo / apagado / desactualizado)
+ *  - Toggle apagar/encender por sensor
+ *  - CRUD completo: crear, editar y eliminar un sensor SIN tocar codigo —
+ *    el simulador lo lee de la BD en el proximo ciclo.
  */
 function Sensores() {
   const [sensores, setSensores] = useState([])
@@ -147,8 +147,9 @@ function Sensores() {
         <div>
           <h1>Sensores</h1>
           <p>
-            Los datos sin recibir en más de 90 s se marcan desactualizados (HDU-01). Aquí se
-            agregan, modifican y eliminan sensores sin tocar código (modificabilidad).
+            Los datos sin recibir en más de 90 s se marcan desactualizados. Aquí se
+            agregan, modifican y eliminan sensores en caliente, sin tocar código ni
+            reiniciar el sistema.
           </p>
         </div>
         <button type="button" className="btn-nuevo" onClick={nuevo} disabled={form !== null}>

@@ -46,7 +46,7 @@ const post = (ruta, cuerpo) => enviar('POST', ruta, cuerpo)
 const put = (ruta, cuerpo) => enviar('PUT', ruta, cuerpo)
 const del = (ruta) => enviar('DELETE', ruta, undefined)
 
-/** HDU-01: estado de los sensores (activos / desactualizados) */
+/** Estado de los sensores (activos / desactualizados) */
 export function fetchSensores() {
   return get('/api/sensores')
 }
@@ -64,17 +64,17 @@ export function fetchEstado() {
   return get('/api/estado')
 }
 
-/** HDU-07: registro de errores */
+/** Registro de errores */
 export function fetchErrores(tipo) {
   const q = tipo ? `?tipo=${encodeURIComponent(tipo)}` : ''
   return get(`/api/errores${q}`)
 }
 
 // ---------------------------------------------------------------------------
-// Demo de fallas — la ruleta del panel (E1, E11)
-//   POST /api/demo/panic     -> apaga un sensor o el componente de
-//                               procesamiento, elegidos AL AZAR
-//   POST /api/demo/restaurar -> reactiva todo lo apagado y drena la cola
+// Control de fallas — la ruleta del panel
+//   POST /api/demo/panic     -> apaga al azar un sensor o cualquier servicio
+//                               (recepcion, procesamiento, persistencia, MQTT)
+//   POST /api/demo/restaurar -> reactiva todo lo caido y drena las colas
 //   GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
 // ---------------------------------------------------------------------------
 
@@ -91,7 +91,7 @@ export function fetchDemoEstado() {
 }
 
 // ---------------------------------------------------------------------------
-// CRUD de sensores (modificabilidad: cambiar/eliminar sin tocar codigo)
+// CRUD de sensores (agregar / modificar / eliminar sin tocar codigo)
 // ---------------------------------------------------------------------------
 
 export function crearSensor(sensor) {

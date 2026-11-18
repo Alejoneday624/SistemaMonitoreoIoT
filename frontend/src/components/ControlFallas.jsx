@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react'
 import { fetchDemoEstado, panic, restaurar } from '../api.js'
 
+/** Nombres legibles de cada servicio para la ruleta */
+const NOMBRE_SERVICIO = {
+  RECEPCION: 'Recepción',
+  PROCESAMIENTO: 'Procesamiento',
+  PERSISTENCIA: 'Base de datos',
+  MQTT: 'Broker MQTT',
+}
+
 /**
- * Panel de control de fallas — la "ruleta" de la demo (E1, E11).
+ * Panel de control de fallas — la "ruleta".
  *
- *  - "Apagar aleatorio": el backend elige AL AZAR entre un sensor del
- *    simulador o el componente interno de procesamiento, y lo silencia.
- *    El tablero sigue funcionando con el resto.
- *  - "Restaurar": reactiva todo lo apagado; la cola pendiente se drena
- *    sin duplicados (HDU-08, recuperacion automatica).
+ *  - "Girar ruleta": el backend elige AL AZAR un sensor del catalogo o
+ *    cualquier servicio del flujo (recepcion, procesamiento, persistencia,
+ *    broker MQTT) y lo deja fuera de servicio. El tablero sigue vivo con
+ *    el resto y la cola acumula los mensajes pendientes.
+ *  - "Restaurar": reactiva todo lo caido; las colas se drenan sin
+ *    duplicados (recuperacion automatica).
  *  - El estado y la cola se actualizan solos cada 5 s.
  */
 function ControlFallas() {
@@ -43,9 +52,9 @@ function ControlFallas() {
       setUltimo(
         r.tipo === 'SENSOR'
           ? `caido el sensor ${r.victima} (${r.detalle})`
-          : `caido el componente ${r.victima} (${r.detalle})`,
+          : `caido ${r.victima} (${r.detalle})`,
       )
-      setEstado((e) => (e ? { ...e, caido: true, tipo: r.tipo, victima: r.tipo === 'SENSOR' ? r.victima : 'Procesamiento' } : e))
+      setEstado((e) => (e ? { ...e, caido: true, tipo: r.tipo, victima: r.victima } : e))
       setError(null)
     } catch (err) {
       setUltimo('sin cambios')
@@ -73,6 +82,9 @@ function ControlFallas() {
 
   const caido = estado?.caido
   const esSensor = estado?.tipo === 'SENSOR'
+  const nombreCaido = esSensor
+    ? `sensor ${estado.victima}`
+    : NOMBRE_SERVICIO[estado?.tipo] || estado?.victima || 'servicio'
 
   return (
     <>
@@ -80,8 +92,8 @@ function ControlFallas() {
         <div>
           <h1>Control de fallas</h1>
           <p>
-            Botón de pánico para la demo: la ruleta elige al azar qué apagar y
-            comprueba que el sistema sigue funcionando (E1, E11).
+            La ruleta elige al azar qué apagar — un sensor o cualquier servicio del flujo —
+            y comprueba que el sistema lo absorbe sin perder datos.
           </p>
         </div>
       </header>
@@ -113,11 +125,7 @@ function ControlFallas() {
           <p className="papanico-estado">
             Estado:{' '}
             <strong>
-              {caido
-                ? esSensor
-                  ? `sensor ${estado.victima} caído — reintentando`
-                  : `componente ${estado.victima} caído — reintentando`
-                : ultimo}
+              {caido ? `${nombreCaido} caído — reintentando` : ultimo}
             </strong>
             {caido && estado.segundosCaido != null && ` — caído hace ${estado.segundosCaido} s`}
           </p>
@@ -133,19 +141,19 @@ function ControlFallas() {
         <h3>Qué demuestra</h3>
         <ol className="pasos">
           <li>
-            <strong>Apagar un sensor</strong> — su gráfica se congela con marca
-            “sin datos”, las demás siguen moviéndose; a los 90 s salta la marca
-            de inactivo (HDU-04, heartbeat).
+            <strong>Apagar un sensor</strong> — deja de publicar, su marca pasa a
+            “sin datos” en las tarjetas y a los 90 s se marca inactivo
+            (heartbeat).
           </li>
           <li>
-            <strong>Caer el componente de procesamiento</strong> — las
-            mediciones se acumulan en la cola (QoS 1 + sesión persistente) y el
-            tablero muestra “componente caído — reintentando” con el contador de
-            cola creciendo.
+            <strong>Caer un servicio</strong> — recepción, procesamiento, base de
+            datos o broker MQTT: los mensajes se acumulan en la cola (QoS 1 +
+            sesión persistente) y el tablero muestra “caído — reintentando” con
+            el contador creciendo.
           </li>
           <li>
-            <strong>Restaurar</strong> — la cola se vacía sin duplicados y todo
-            vuelve a la normalidad (HDU-08, recuperación automática).
+            <strong>Restaurar</strong> — cada cola se vacía en orden FIFO sin
+            duplicados y todo vuelve a la normalidad (recuperación automática).
           </li>
         </ol>
 

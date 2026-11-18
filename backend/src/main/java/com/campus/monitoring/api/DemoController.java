@@ -20,24 +20,29 @@ import org.springframework.web.server.ResponseStatusException;
 import com.campus.monitoring.cola.ColaMensajes;
 import com.campus.monitoring.cola.ColaMensajesRepository;
 import com.campus.monitoring.config.MqttBus;
+import com.campus.monitoring.persistencia.PersistenciaService;
 import com.campus.monitoring.persistencia.Sensor;
 import com.campus.monitoring.persistencia.SensorRepository;
 import com.campus.monitoring.procesamiento.ProcesamientoService;
+import com.campus.monitoring.recepcion.RecepcionService;
 import com.campus.monitoring.sensor.SensorSimulator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Demo de fallas (E1/E11) — la "ruleta" del panel de control.
+ * Ruleta de fallas del panel de control.
  *
  * POST /api/demo/panic     -> elige AL AZAR la victima: un sensor del
- *                             catalogo o el componente interno de
- *                             procesamiento, y la apaga.
- * POST /api/demo/restaurar -> reactiva todo lo apagado y drena la cola.
+ *                             catalogo o cualquier servicio del flujo
+ *                             (recepcion, procesamiento, persistencia/BD,
+ *                             broker MQTT) y lo deja fuera de servicio.
+ * POST /api/demo/restaurar -> reactiva todo lo caido y drena las colas.
  * GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
  *                             se acumulo (para el banner del tablero).
  *
- * La orden al simulador viaja por MQTT (Pub/Sus puro, topic
- * control/simulador/#): la API no toca el simulador directamente.
+ * Cada caida se simula con un flag en el propio servicio: mientras este
+ * activo, el servicio lanza ComponenteCaidoException (o el bus no confirma
+ * publicaciones) y los mensajes quedan PENDIENTES en cola sin perderse.
+ * Una sola falla activa a la vez.
  */
 @RestController
 @RequestMapping("/api/demo")
@@ -45,34 +50,42 @@ public class DemoController {
 
     private static final Logger log = LoggerFactory.getLogger(DemoController.class);
 
-    /** Una sola falla activa a la vez (la demo se lee mas clara) */
+    /** Sin falla activa */
     private static final String NINGUNA = null;
 
     private final SensorSimulator simulador;
+    private final RecepcionService recepcion;
     private final ProcesamientoService procesamiento;
+    private final PersistenciaService persistencia;
     private final SensorRepository sensores;
     private final ColaMensajesRepository colas;
     private final MqttBus mqtt;
     private final ObjectMapper json = new ObjectMapper();
 
-    /** Tipo de la falla activa: "SENSOR" | "COMPONENTE" | null */
+    /**
+     * Tipo de la falla activa:
+     * "SENSOR" | "RECEPCION" | "PROCESAMIENTO" | "PERSISTENCIA" | "MQTT"
+     */
     private volatile String tipoCaido = NINGUNA;
-    /** Id del sensor caido o nombre del componente */
+    /** Id del sensor caido o nombre del servicio */
     private volatile String victima = NINGUNA;
     private volatile Instant desde = null;
 
-    public DemoController(SensorSimulator simulador, ProcesamientoService procesamiento,
+    public DemoController(SensorSimulator simulador, RecepcionService recepcion,
+                          ProcesamientoService procesamiento, PersistenciaService persistencia,
                           SensorRepository sensores, ColaMensajesRepository colas, MqttBus mqtt) {
         this.simulador = simulador;
+        this.recepcion = recepcion;
         this.procesamiento = procesamiento;
+        this.persistencia = persistencia;
         this.sensores = sensores;
         this.colas = colas;
         this.mqtt = mqtt;
     }
 
     /**
-     * La ruleta: 50/50 entre apagar un sensor del catalogo y caer el
-     * componente de procesamiento. Si ya hay una falla activa, 400.
+     * La ruleta: sortea entre un sensor del catalogo y cualquier servicio
+     * del flujo de datos. Si ya hay una falla activa, 409.
      */
     @PostMapping("/panic")
     public Map<String, Object> panic() {
@@ -81,45 +94,73 @@ public class DemoController {
                     "Ya hay una falla activa (" + tipoCaido + ": " + victima
                             + "). Restaura antes de girar la ruleta otra vez.");
         }
+
         List<Sensor> candidatos = sensores.findAll().stream()
                 .filter(s -> !simulador.estadoApagados().containsKey(s.getId()))
                 .toList();
-        boolean elegirSensor = !candidatos.isEmpty()
-                && ThreadLocalRandom.current().nextBoolean();
+
+        // La ruleta: un slot por sensor candidato + un slot por servicio.
+        List<String> servicios = List.of("RECEPCION", "PROCESAMIENTO", "PERSISTENCIA", "MQTT");
+        int slots = candidatos.size() + servicios.size();
+        int tiro = ThreadLocalRandom.current().nextInt(slots);
 
         Map<String, Object> r = new LinkedHashMap<>();
-        if (elegirSensor) {
-            Sensor victimaSensor = candidatos.get(ThreadLocalRandom.current().nextInt(candidatos.size()));
+        if (tiro < candidatos.size()) {
+            Sensor victimaSensor = candidatos.get(tiro);
             publicarOrden("apagar", victimaSensor.getId());
             tipoCaido = "SENSOR";
             victima = victimaSensor.getId();
             r.put("tipo", "SENSOR");
-            r.put("victima", victimaSensor.getId());
+            r.put("victima", victima);
             r.put("detalle", victimaSensor.getVariable() + " · " + victimaSensor.getSede()
                     + " · " + victimaSensor.getSalon());
             log.warn("[DEMO] Ruleta -> SENSOR {}", victima);
         } else {
-            procesamiento.caer();
-            tipoCaido = "COMPONENTE";
-            victima = "Procesamiento";
-            r.put("tipo", "COMPONENTE");
+            String servicio = servicios.get(tiro - candidatos.size());
+            switch (servicio) {
+                case "RECEPCION" -> {
+                    recepcion.caer();
+                    victima = "Recepcion";
+                    r.put("detalle", "Los mensajes no se validan: quedan en cola hasta restaurar");
+                }
+                case "PROCESAMIENTO" -> {
+                    procesamiento.caer();
+                    victima = "Procesamiento";
+                    r.put("detalle", "Las mediciones se acumulan en cola hasta restaurar");
+                }
+                case "PERSISTENCIA" -> {
+                    persistencia.caer();
+                    victima = "Base de datos";
+                    r.put("detalle", "Nada se guarda: los mensajes esperan en cola hasta restaurar");
+                }
+                case "MQTT" -> {
+                    mqtt.caerBroker();
+                    victima = "Broker MQTT";
+                    r.put("detalle", "Nada fluye por el bus: la cola de salida crece hasta restaurar");
+                }
+                default -> throw new IllegalStateException("servicio desconocido: " + servicio);
+            }
+            tipoCaido = servicio;
+            r.put("tipo", servicio);
             r.put("victima", victima);
-            r.put("detalle", "Las mediciones se acumulan en cola hasta restaurar");
-            log.warn("[DEMO] Ruleta -> COMPONENTE procesamiento");
+            log.warn("[DEMO] Ruleta -> {} ({})", servicio, victima);
         }
         desde = Instant.now();
         r.put("desde", desde.toString());
         return r;
     }
 
-    /** Reactiva sensor y componente, y drena la cola pendiente al instante */
+    /** Reactiva todo lo caido y drena las colas pendientes al instante */
     @PostMapping("/restaurar")
     public Map<String, Object> restaurar() {
         String tipoAnterior = tipoCaido;
         String victimaAnterior = victima;
 
-        publicarOrden("restaurar", null);   // todas (Pub/Sus con el simulador)
+        publicarOrden("restaurar", null);   // sensores (Pub/Sus con el simulador)
+        recepcion.levantar();
         procesamiento.levantar();
+        persistencia.levantar();
+        mqtt.levantarBroker();
         mqtt.drenarColas();                 // no esperar al tick: vacia ya
 
         tipoCaido = NINGUNA;

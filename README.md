@@ -68,22 +68,28 @@ QoS 1 en todas las publicaciones + sesiones `cleanSession=false`: si un
 suscriptor se cae, el broker **encola los mensajes** y los entrega al
 reconectar (tácticas E9/E11).
 
-## Demo de fallas — la ruleta (E1, E11)
+## Demo de fallas — la ruleta
 
 En el tablero, sección **Control de fallas**, el botón *Girar ruleta* elige
-**al azar** la víctima (50/50):
+**al azar** la víctima entre un sensor del catálogo y **cualquier servicio**
+del flujo (recepción, procesamiento, persistencia/base de datos, broker MQTT):
 
 - **Sensor** → la orden viaja por MQTT (`control/simulador/#`, Pub/Sus puro)
-  y el simulador deja de publicarlo: su gráfica se congela, a los 90 s aparece
-  "Desactualizado" y el banner global muestra **"Sensor caído: … — reintentando"**.
-  El resto del sistema sigue moviéndose.
-- **Componente (Procesamiento)** → el manejador lanza `ComponenteCaidoException`:
-  los mensajes **no se procesan pero tampoco se descartan ni agotan reintentos**,
-  quedan `PENDIENTES` en la cola de entrada y el banner muestra
-  **"Componente caído: Procesamiento — cola: N mensajes — reintentando"**.
+  y el simulador deja de publicarlo: sus tarjetas muestran "sin datos", a los
+ 90 s aparece "Desactualizado" y el banner global muestra
+  **"Sensor caído: … — reintentando"**. El resto del sistema sigue moviéndose.
+- **Recepción / Procesamiento / Base de datos** → el manejador lanza
+  `ComponenteCaidoException`: los mensajes **no se procesan pero tampoco se
+  descartan ni agotan reintentos**, quedan `PENDIENTES` en su cola de entrada
+  y el banner muestra **"Caido: … — cola: N mensajes — reintentando"**.
+- **Broker MQTT** → `MqttBus` deja de confirmar publicaciones: todo se
+  acumula en la cola de **salida** (outbox) y nada fluye de punta a punta.
 
-*Restaurar* reactiva sensor y componente y drena la cola al instante (FIFO,
-sin duplicados). Solo hay una falla activa a la vez.
+En cualquiera de los casos, la **gráfica se corta** en el periodo caído
+(eje temporal proporcional + banda sombreada con el nombre de la víctima) y
+las tarjetas marcan "sin datos hace X s". *Restaurar* reactiva todo y drena
+las colas al instante (FIFO, sin duplicados). Solo hay una falla activa a la
+vez.
 
 ```bash
 curl -X POST http://localhost:8081/api/demo/panic      # gira la ruleta

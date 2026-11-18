@@ -14,7 +14,7 @@ const SECCIONES = [
 function App() {
   const [seccion, setSeccion] = useState('dashboard')
 
-  // Marca de conexion con la API (HDU-01: mostrar si los datos son confiables)
+  // Marca de conexion con la API: indica si los datos son confiables
   const [apiOk, setApiOk] = useState(null)
   useEffect(() => {
     let vivo = true
@@ -55,14 +55,13 @@ function App() {
         </nav>
 
         <footer className="sidebar-pie">
-          Arquitectura de Software
+          Monitoreo ambiental en tiempo real
           <br />
-          <small>Prototipo · Ronda 1</small>
+          <small>Sensores · Colas · Recuperación</small>
         </footer>
       </aside>
 
       <main className="contenido">
-        {/* Banner de fallas visible en todas las secciones (E1, E11) */}
         <BannerFallas />
         {seccion === 'dashboard' && <Dashboard />}
         {seccion === 'sensores' && <Sensores />}

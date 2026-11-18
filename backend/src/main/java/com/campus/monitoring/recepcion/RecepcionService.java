@@ -8,19 +8,25 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import com.campus.monitoring.config.ComponenteCaidoException;
 import com.campus.monitoring.config.MqttBus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Servicio de recepcion de datos (HDU-02 / HDU-03).
+ * Servicio de recepcion de datos.
  *
  * - Se suscribe a campus/# (todas las sedes y variables).
  * - Valida formato y campos obligatorios; lo invalido NO pasa al procesamiento
  *   y se registra en interno/logs.
  * - Lo valido se reenvia a interno/validadas (QoS 1).
  * - Si procesamiento no esta disponible, el broker encola (QoS 1 + sesion
- *   persistente) y al reconectar llegan los pendientes (E9/E11).
+ *   persistente) y al reconectar llegan los pendientes.
+ *
+ * DEMO DE FALLAS: el flag "caido" simula la caida de este servicio. Mientras
+ * este activo, procesarMensaje lanza ComponenteCaidoException: los mensajes
+ * quedan PENDIENTES en la cola de entrada (sin gastar reintentos) hasta que
+ * el panel los restaure.
  */
 @Component
 public class RecepcionService {
@@ -29,6 +35,9 @@ public class RecepcionService {
 
     private final MqttBus mqtt;
     private final ObjectMapper json = new ObjectMapper();
+
+    /** Caida simulada del servicio (panel de control de fallas) */
+    private volatile boolean caido = false;
 
     public RecepcionService(MqttBus mqtt) {
         this.mqtt = mqtt;
@@ -40,6 +49,11 @@ public class RecepcionService {
     }
 
     void procesarMensaje(String topic, String mensaje) {
+        if (caido) {
+            // Servicio fuera de servicio: el bus deja el mensaje PENDIENTE
+            // y reintenta en el proximo tick (ver MqttBus).
+            throw new ComponenteCaidoException("recepcion");
+        }
         try {
             JsonNode n = json.readTree(mensaje);
             String error = validar(n);
@@ -83,5 +97,22 @@ public class RecepcionService {
         } catch (Exception e) {
             log.error("[RECEPCION] No se pudo publicar el error: {}", e.getMessage());
         }
+    }
+
+    /** Simula la caida del servicio: los mensajes se acumulan en cola */
+    public void caer() {
+        caido = true;
+        log.warn("[RECEPCION] Servicio CAIDO por orden del panel: "
+                + "los mensajes se acumulan en cola hasta restaurar");
+    }
+
+    /** Restaura el servicio: el proximo tick vacia la cola pendiente */
+    public void levantar() {
+        caido = false;
+        log.info("[RECEPCION] Servicio restaurado: reanudando el flujo");
+    }
+
+    public boolean estaCaido() {
+        return caido;
     }
 }
