@@ -22,6 +22,30 @@ async function get(ruta) {
   return res.json()
 }
 
+/** Helpers de mutacion: devuelven el JSON y lanzan con el mensaje del backend */
+async function enviar(metodo, ruta, cuerpo) {
+  const res = await fetch(`${BASE}${ruta}`, {
+    method: metodo,
+    headers: cuerpo != null ? { 'Content-Type': 'application/json' } : undefined,
+    body: cuerpo != null ? JSON.stringify(cuerpo) : undefined,
+  })
+  if (!res.ok) {
+    let detalle = ''
+    try {
+      const data = await res.json()
+      detalle = data.message || data.error || ''
+    } catch {
+      /* sin cuerpo JSON */
+    }
+    throw new Error(detalle || `API ${ruta} respondio ${res.status}`)
+  }
+  return res.json()
+}
+
+const post = (ruta, cuerpo) => enviar('POST', ruta, cuerpo)
+const put = (ruta, cuerpo) => enviar('PUT', ruta, cuerpo)
+const del = (ruta) => enviar('DELETE', ruta, undefined)
+
 /** HDU-01: estado de los sensores (activos / desactualizados) */
 export function fetchSensores() {
   return get('/api/sensores')
@@ -47,16 +71,45 @@ export function fetchErrores(tipo) {
 }
 
 // ---------------------------------------------------------------------------
-// Ronda 2 — endpoints del panel de control de fallas
-// TODO(Ronda 2): descomentar cuando exista DemoController en el backend:
-//   POST /api/demo/panic     -> apaga un sensor o componente interno al azar
-//   POST /api/demo/restaurar -> reactiva todo lo apagado
-//
-// export function panic() {
-//   return fetch(`${BASE}/api/demo/panic`, { method: 'POST' }).then((r) => r.json())
-// }
-//
-// export function restaurar() {
-//   return fetch(`${BASE}/api/demo/restaurar`, { method: 'POST' }).then((r) => r.json())
-// }
+// Demo de fallas — la ruleta del panel (E1, E11)
+//   POST /api/demo/panic     -> apaga un sensor o el componente de
+//                               procesamiento, elegidos AL AZAR
+//   POST /api/demo/restaurar -> reactiva todo lo apagado y drena la cola
+//   GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
 // ---------------------------------------------------------------------------
+
+export function panic() {
+  return post('/api/demo/panic')
+}
+
+export function restaurar() {
+  return post('/api/demo/restaurar')
+}
+
+export function fetchDemoEstado() {
+  return get('/api/demo/estado')
+}
+
+// ---------------------------------------------------------------------------
+// CRUD de sensores (modificabilidad: cambiar/eliminar sin tocar codigo)
+// ---------------------------------------------------------------------------
+
+export function crearSensor(sensor) {
+  return post('/api/sensores', sensor)
+}
+
+export function actualizarSensor(id, sensor) {
+  return put(`/api/sensores/${encodeURIComponent(id)}`, sensor)
+}
+
+export function eliminarSensor(id) {
+  return del(`/api/sensores/${encodeURIComponent(id)}`)
+}
+
+export function apagarSensor(id) {
+  return post(`/api/sensores/${encodeURIComponent(id)}/apagar`)
+}
+
+export function encenderSensor(id) {
+  return post(`/api/sensores/${encodeURIComponent(id)}/encender`)
+}

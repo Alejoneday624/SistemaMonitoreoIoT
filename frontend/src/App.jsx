@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import Dashboard from './components/Dashboard.jsx'
 import Sensores from './components/Sensores.jsx'
 import ControlFallas from './components/ControlFallas.jsx'
+import BannerFallas from './components/BannerFallas.jsx'
 import './App.css'
 
 const SECCIONES = [
@@ -61,6 +62,8 @@ function App() {
       </aside>
 
       <main className="contenido">
+        {/* Banner de fallas visible en todas las secciones (E1, E11) */}
+        <BannerFallas />
         {seccion === 'dashboard' && <Dashboard />}
         {seccion === 'sensores' && <Sensores />}
         {seccion === 'fallas' && <ControlFallas />}

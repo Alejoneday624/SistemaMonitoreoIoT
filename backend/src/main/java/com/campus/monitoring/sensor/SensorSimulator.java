@@ -1,7 +1,6 @@
 package com.campus.monitoring.sensor;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,15 +18,21 @@ import org.springframework.stereotype.Component;
 import com.campus.monitoring.config.MqttBus;
 import com.campus.monitoring.persistencia.Sensor;
 import com.campus.monitoring.persistencia.SensorRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Simulador de los 12 sensores de la Tabla 1 del documento.
+ * Simulador de los sensores de la Tabla 1 del documento.
  *
  * - Publica en campus/{sede}/{variable}/{sensorId} con QoS 1 (Pub/Sus).
- * - Se registra en la BD al arrancar (HDU-05, los crea si no existen).
+ * - Se registra en la BD al arrancar (HDU-05): si la tabla esta VACIA siembra
+ *   el catalogo por defecto; si no, respeta lo que haya (asi un sensor
+ *   eliminado con el CRUD no resucita al reiniciar) y le backfillea valorBase.
+ * - El catalogo se lee de la BD en cada ciclo: agregar/modificar/eliminar un
+ *   sensor desde la API o la UI se refleja sin tocar codigo ni reiniciar
+ *   (modificabilidad: el simulador ES el unico punto que conoce el catalogo).
  * - Escucha control/simulador/# para las ordenes de falla del panel
- *   (estructura lista para la Ronda 2: apagar / restaurar sensor).
+ *   (apagar / restaurar sensor — la "ruleta" del botón de panico).
  */
 @Component
 public class SensorSimulator {
@@ -38,7 +43,7 @@ public class SensorSimulator {
     private final SensorRepository sensores;
     private final ObjectMapper json = new ObjectMapper();
 
-    /** Sensores apagados por orden del panel (Ronda 2) */
+    /** Sensores apagados por orden del panel (ruleta / toggle individual) */
     private final Map<String, Boolean> apagados = new ConcurrentHashMap<>();
 
     @Value("${sensor.frecuencia-ms:5000}")
@@ -49,9 +54,13 @@ public class SensorSimulator {
         this.sensores = sensores;
     }
 
-    /** Catalogo de la Tabla 1: id, variable, sede, salon, valor base */
-    private List<SensorDef> catalogo() {
-        List<SensorDef> defs = new ArrayList<>();
+    /**
+     * Catalogo por defecto de la Tabla 1: id, variable, sede, salon, valor
+     * base. Solo se usa para sembrar la BD la PRIMERA vez (tabla vacia) y
+     * para backfillear valorBase de filas antiguas.
+     */
+    private List<SensorDef> catalogoPorDefecto() {
+        List<SensorDef> defs = new java.util.ArrayList<>();
         // Temperatura Sur — 5 sensores, precision +/- 2 °C
         defs.add(new SensorDef("TMP-SUR-01", "temperatura", "Sur", "Salon 101", 23.0));
         defs.add(new SensorDef("TMP-SUR-02", "temperatura", "Sur", "Salon 102", 24.0));
@@ -71,47 +80,106 @@ public class SensorSimulator {
         return defs;
     }
 
-    /** Registra los sensores en la BD si aun no existen (HDU-05) */
+    /** Valor por defecto por variable (para sensores creados con el CRUD) */
+    private double valorBasePorDefecto(String variable) {
+        return switch (variable) {
+            case "temperatura" -> 23.0;
+            case "calidad-aire" -> 500.0;
+            case "consumo-electrico" -> 145.0;
+            case "consumo-agua" -> 1.8;
+            default -> 0.0;
+        };
+    }
+
+    /**
+     * Registra los sensores en la BD si aun no existen (HDU-05) y deja
+     * siempre escuchando las ordenes de falla del panel (Pub/Sus).
+     */
     @EventListener(ApplicationReadyEvent.class)
     public void registrarSensores() {
         int creados = 0;
-        for (SensorDef def : catalogo()) {
-            if (!sensores.existsById(def.id())) {
-                sensores.save(new Sensor(def.id(), def.variable(), def.sede(), def.salon(), 5));
+        if (sensores.count() == 0) {
+            // Primera vez (o BD nueva): siembra el catalogo de la Tabla 1
+            for (SensorDef def : catalogoPorDefecto()) {
+                sensores.save(new Sensor(def.id(), def.variable(), def.sede(), def.salon(), 5)
+                        .conValorBase(def.base()));
                 creados++;
             }
+        } else {
+            // Backfill: filas antiguas (antes del CRUD) sin valorBase
+            for (Sensor s : sensores.findAll()) {
+                if (s.getValorBase() == null) {
+                    s.setValorBase(valorBasePorDefecto(s.getVariable()));
+                    sensores.save(s);
+                }
+            }
         }
-        // Orden de falla del panel: la escucha siempre, aunque este MVP solo la registre
-        mqtt.suscribir("campus-simulador", "control/simulador/#", (topic, mensaje) -> {
-            // TODO (Ronda 2): interpretar apagar/restaurar sobre el sensor indicado
-            log.warn("[CONTROL] Orden recibida (pendiente Ronda 2): {} -> {}", topic, mensaje);
-        });
-        log.info("[SIMULADOR] Catalogo listo: {} sensores nuevos, {} en total (Tabla 1)",
+        // Orden de falla del panel (Pub/Sus puro: la API publica y aqui se actua)
+        mqtt.suscribir("campus-simulador", "control/simulador/#", this::interpretarOrden);
+        log.info("[SIMULADOR] Catalogo listo: {} nuevos, {} en total (Tabla 1)",
                 creados, sensores.count());
+    }
+
+    /**
+     * Orden de falla recibida via control/simulador/#:
+     *   {"accion":"apagar","sensorId":"TMP-SUR-01"}
+     *   {"accion":"restaurar"}                    -> restaura todas
+     *   {"accion":"restaurar","sensorId":"..."}   -> restaura una
+     */
+    void interpretarOrden(String topic, String mensaje) {
+        try {
+            JsonNode n = json.readTree(mensaje);
+            String accion = n.path("accion").asText("");
+            String sensorId = n.path("sensorId").asText("");
+            switch (accion) {
+                case "apagar" -> {
+                    if (sensorId.isBlank()) {
+                        log.warn("[CONTROL] Orden apagar sin sensorId: {}", mensaje);
+                    } else {
+                        apagar(sensorId);
+                    }
+                }
+                case "restaurar" -> {
+                    if (sensorId.isBlank()) {
+                        List<String> todos = List.copyOf(apagados.keySet());
+                        todos.forEach(this::restaurar);
+                        log.info("[CONTROL] Orden restaurar: {} sensor(es) reactivado(s)", todos.size());
+                    } else {
+                        restaurar(sensorId);
+                    }
+                }
+                default -> log.warn("[CONTROL] Orden desconocida: {}", mensaje);
+            }
+        } catch (Exception e) {
+            log.error("[CONTROL] Orden ilegible en {}: {}", topic, e.getMessage());
+        }
     }
 
     /** Publica todas las mediciones en cada ciclo (Tabla 1: frecuencia configurable) */
     @Scheduled(fixedDelayString = "${sensor.frecuencia-ms:5000}")
     public void publicarMediciones() {
         Instant ahora = Instant.now();
-        for (SensorDef def : catalogo()) {
-            if (Boolean.TRUE.equals(apagados.get(def.id()))) {
-                continue; // apagado por orden del panel (Ronda 2)
+        for (Sensor s : sensores.findAll()) {
+            if (Boolean.TRUE.equals(apagados.get(s.getId()))) {
+                // Apagado por orden del panel: no publica, pero el resto del
+                // sistema sigue vivo. El panel muestra "reintentando".
+                log.info("[SIMULADOR] {} apagado: reintentando publicar (sin datos)", s.getId());
+                continue;
             }
-            double valor = medir(def);
+            double valor = medir(s);
             Map<String, Object> payload = new LinkedHashMap<>();
-            payload.put("sensorId", def.id());
-            payload.put("variable", def.variable());
-            payload.put("sede", def.sede());
-            payload.put("salon", def.salon());
+            payload.put("sensorId", s.getId());
+            payload.put("variable", s.getVariable());
+            payload.put("sede", s.getSede());
+            payload.put("salon", s.getSalon());
             payload.put("valor", valor);
             payload.put("fecha", ahora.toString());
             try {
                 String topic = "campus/%s/%s/%s".formatted(
-                        def.sede().toLowerCase(), def.variable(), def.id());
+                        s.getSede().toLowerCase(), s.getVariable(), s.getId());
                 mqtt.publicar(topic, json.writeValueAsString(payload));
             } catch (Exception e) {
-                log.error("[SIMULADOR] No se pudo publicar {}: {}", def.id(), e.getMessage());
+                log.error("[SIMULADOR] No se pudo publicar {}: {}", s.getId(), e.getMessage());
             }
         }
     }
@@ -122,17 +190,19 @@ public class SensorSimulator {
      * - calidad-aire: base 400-650 ppm con picos ocasionales que cruzan 900
      * - consumo electrico/agua: valores flotantes estables
      */
-    private double medir(SensorDef def) {
+    private double medir(Sensor s) {
         ThreadLocalRandom rnd = ThreadLocalRandom.current();
-        return switch (def.variable()) {
-            case "temperatura" -> redondear(def.base() + rnd.nextDouble(-2, 2), 1);
+        double base = s.getValorBase() != null ? s.getValorBase()
+                : valorBasePorDefecto(s.getVariable());
+        return switch (s.getVariable()) {
+            case "temperatura" -> redondear(base + rnd.nextDouble(-2, 2), 1);
             case "calidad-aire" -> {
                 double pico = rnd.nextDouble() < 0.08 ? rnd.nextDouble(400, 550) : 0;
-                yield redondear(Math.max(380, Math.min(1200, def.base() + pico + rnd.nextDouble(-60, 60))), 0);
+                yield redondear(Math.max(380, Math.min(1200, base + pico + rnd.nextDouble(-60, 60))), 0);
             }
-            case "consumo-electrico" -> redondear(def.base() + rnd.nextDouble(-8, 8), 1);
-            case "consumo-agua" -> redondear(Math.max(0, def.base() + rnd.nextDouble(-0.4, 0.4)), 2);
-            default -> def.base();
+            case "consumo-electrico" -> redondear(base + rnd.nextDouble(-8, 8), 1);
+            case "consumo-agua" -> redondear(Math.max(0, base + rnd.nextDouble(-0.4, 0.4)), 2);
+            default -> base;
         };
     }
 
@@ -141,16 +211,26 @@ public class SensorSimulator {
         return Math.round(v * p) / p;
     }
 
-    /** Apaga un sensor (usado por el panel de control) */
+    /** Apaga un sensor (usado por el panel de control / la ruleta) */
     public void apagar(String sensorId) {
+        if (!sensores.existsById(sensorId)) {
+            log.warn("[SIMULADOR] Orden de apagar para sensor inexistente: {}", sensorId);
+            return;
+        }
         apagados.put(sensorId, true);
         log.warn("[SIMULADOR] Sensor {} APAGADO por orden del panel", sensorId);
     }
 
     /** Reactiva un sensor apagado */
     public void restaurar(String sensorId) {
+        if (apagados.remove(sensorId) != null) {
+            log.info("[SIMULADOR] Sensor {} restaurado", sensorId);
+        }
+    }
+
+    /** Limpia el mapa al eliminar un sensor con el CRUD */
+    public void olvidar(String sensorId) {
         apagados.remove(sensorId);
-        log.info("[SIMULADOR] Sensor {} restaurado", sensorId);
     }
 
     public Map<String, Boolean> estadoApagados() {

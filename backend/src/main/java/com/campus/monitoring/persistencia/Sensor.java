@@ -31,6 +31,10 @@ public class Sensor {
     @Column(name = "salon", length = 80)
     private String salon;
 
+    /** Valor base con el que el simulador genera las lecturas de este sensor */
+    @Column(name = "valor_base")
+    private Double valorBase;
+
     /** Frecuencia configurada de envio de mediciones, en segundos */
     @Column(name = "frecuencia_segundos")
     private Integer frecuenciaSegundos;
@@ -84,6 +88,20 @@ public class Sensor {
 
     public void setSalon(String salon) {
         this.salon = salon;
+    }
+
+    public Double getValorBase() {
+        return valorBase;
+    }
+
+    public void setValorBase(Double valorBase) {
+        this.valorBase = valorBase;
+    }
+
+    /** Asignacion en cadena, para sembrar el catalogo por defecto */
+    public Sensor conValorBase(Double valorBase) {
+        this.valorBase = valorBase;
+        return this;
     }
 
     public Integer getFrecuenciaSegundos() {

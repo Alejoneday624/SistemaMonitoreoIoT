@@ -19,6 +19,7 @@ import com.campus.monitoring.persistencia.Medicion;
 import com.campus.monitoring.persistencia.MedicionRepository;
 import com.campus.monitoring.persistencia.Sensor;
 import com.campus.monitoring.persistencia.SensorRepository;
+import com.campus.monitoring.sensor.SensorSimulator;
 
 /**
  * API REST del tablero (Tabla 32: ofrece endpoints para el tablero).
@@ -34,18 +35,21 @@ public class PanelApiController {
     private final SensorRepository sensores;
     private final MedicionRepository mediciones;
     private final ErrorRegistroRepository errores;
+    private final SensorSimulator simulador;
 
     public PanelApiController(SensorRepository sensores, MedicionRepository mediciones,
-                              ErrorRegistroRepository errores) {
+                              ErrorRegistroRepository errores, SensorSimulator simulador) {
         this.sensores = sensores;
         this.mediciones = mediciones;
         this.errores = errores;
+        this.simulador = simulador;
     }
 
     /** HDU-01: estado de todos los sensores + vigencia de sus datos */
     @GetMapping("/sensores")
     public List<Map<String, Object>> sensores() {
         Instant ahora = Instant.now();
+        java.util.Set<String> apagados = simulador.estadoApagados().keySet();
         List<Map<String, Object>> salida = new ArrayList<>();
         for (Sensor s : sensores.findAll()) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -53,7 +57,9 @@ public class PanelApiController {
             m.put("variable", s.getVariable());
             m.put("sede", s.getSede());
             m.put("salon", s.getSalon());
+            m.put("valorBase", s.getValorBase());
             m.put("estado", s.getEstado());
+            m.put("apagado", apagados.contains(s.getId()));
             m.put("ultimaMedicionEn", s.getUltimaMedicionEn());
             boolean desactualizado = s.getUltimaMedicionEn() == null
                     || Duration.between(s.getUltimaMedicionEn(), ahora).compareTo(VIGENCIA) > 0;

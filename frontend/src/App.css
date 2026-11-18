@@ -282,8 +282,73 @@
   border: 1px solid var(--border);
   background: transparent;
   color: var(--text);
+  cursor: pointer;
+  opacity: 0.85;
+}
+.btn-fantasma:disabled {
   cursor: not-allowed;
+  opacity: 0.5;
+}
+.btn-fantasma:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-h);
+  opacity: 1;
+}
+.btn-activo {
+  cursor: pointer;
+  opacity: 1;
+}
+.btn-peligro {
+  border-color: rgba(250, 82, 82, 0.45);
+  color: #fa5252;
+}
+.btn-peligro:hover:not(:disabled) {
+  background: rgba(250, 82, 82, 0.12);
+  border-color: #fa5252;
+  color: #fa5252;
+}
+
+/* Botones de alta (nuevo sensor, guardar) */
+.btn-nuevo,
+.btn-guardar {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.btn-nuevo {
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--text-h);
+}
+.btn-nuevo:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-guardar {
+  background: #12b886;
+  border: 1px solid #0ca678;
+  color: #fff;
+}
+.btn-guardar:disabled {
   opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Aviso de exito (CRUD de sensores) */
+.aviso-ok {
+  background: rgba(18, 184, 134, 0.12);
+  border-color: rgba(18, 184, 134, 0.4);
+  color: var(--text-h);
+}
+
+/* Celda de acciones de la tabla (varios botones) */
+.celda-acciones {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 /* ---------------- Panel de panico ---------------- */
@@ -307,6 +372,10 @@
   font-weight: 600;
   padding: 10px 18px;
   border-radius: 8px;
+  cursor: pointer;
+}
+.btn-panico:disabled,
+.btn-restaurar:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
@@ -337,6 +406,101 @@
 }
 .pasos code {
   font-size: 12px;
+}
+
+/* ---------------- Banner de fallas (global) ---------------- */
+.banner-fallas {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(250, 82, 82, 0.5);
+  background: rgba(250, 82, 82, 0.14);
+}
+.banner-fallas.banner-componente {
+  border-color: rgba(255, 168, 0, 0.55);
+  background: rgba(255, 168, 0, 0.14);
+}
+.banner-icono {
+  font-size: 20px;
+  animation: banner-parpadeo 1.2s steps(2, start) infinite;
+}
+@keyframes banner-parpadeo {
+  to {
+    visibility: hidden;
+  }
+}
+.banner-texto {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.banner-texto strong {
+  font-size: 15px;
+  color: var(--text-h);
+}
+.banner-texto span {
+  font-size: 13px;
+  color: var(--text-h);
+}
+.banner-fallas .btn-restaurar {
+  font-size: 13px;
+  padding: 7px 14px;
+  flex-shrink: 0;
+}
+.banner-fallas .btn-restaurar:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* ---------------- Formulario de sensores (CRUD) ---------------- */
+.form-sensor h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: var(--text-h);
+}
+.form-campos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.form-campos label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text);
+}
+.form-campos input,
+.form-campos select {
+  font: inherit;
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+}
+.form-campos input:disabled {
+  opacity: 0.6;
+}
+.form-campos input:focus,
+.form-campos select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+.form-acciones {
+  display: flex;
+  gap: 10px;
 }
 
 /* ---------------- Responsivo ---------------- */

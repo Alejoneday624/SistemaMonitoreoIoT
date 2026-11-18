@@ -68,6 +68,52 @@ QoS 1 en todas las publicaciones + sesiones `cleanSession=false`: si un
 suscriptor se cae, el broker **encola los mensajes** y los entrega al
 reconectar (tácticas E9/E11).
 
+## Demo de fallas — la ruleta (E1, E11)
+
+En el tablero, sección **Control de fallas**, el botón *Girar ruleta* elige
+**al azar** la víctima (50/50):
+
+- **Sensor** → la orden viaja por MQTT (`control/simulador/#`, Pub/Sus puro)
+  y el simulador deja de publicarlo: su gráfica se congela, a los 90 s aparece
+  "Desactualizado" y el banner global muestra **"Sensor caído: … — reintentando"**.
+  El resto del sistema sigue moviéndose.
+- **Componente (Procesamiento)** → el manejador lanza `ComponenteCaidoException`:
+  los mensajes **no se procesan pero tampoco se descartan ni agotan reintentos**,
+  quedan `PENDIENTES` en la cola de entrada y el banner muestra
+  **"Componente caído: Procesamiento — cola: N mensajes — reintentando"**.
+
+*Restaurar* reactiva sensor y componente y drena la cola al instante (FIFO,
+sin duplicados). Solo hay una falla activa a la vez.
+
+```bash
+curl -X POST http://localhost:8081/api/demo/panic      # gira la ruleta
+curl http://localhost:8081/api/demo/estado             # qué cayó + cola
+curl -X POST http://localhost:8081/api/demo/restaurar  # todo a la normalidad
+```
+
+## Modificabilidad — CRUD de sensores
+
+Agregar, modificar o eliminar un sensor **no requiere tocar código ni
+reiniciar**: el simulador lee el catálogo de la base en cada ciclo (5 s).
+
+| Endpoint | Acción |
+|---|---|
+| `POST /api/sensores` | Crear (`{"id","variable","sede","salon","valorBase"}`) |
+| `PUT /api/sensores/{id}` | Modificar variable/sede/salón/valor base (el id es la clave, no cambia) |
+| `DELETE /api/sensores/{id}` | Eliminar (deja de publicarse; las mediciones históricas se conservan) |
+| `POST /api/sensores/{id}/apagar` · `/encender` | Toggle individual (HDU-05, columna Acción) |
+
+En la UI (sección **Sensores**): botón *+ Nuevo sensor*, *Editar* y *Eliminar*
+por fila. Los 12 sensores de la Tabla 1 se siembran **solo si la tabla está
+vacía**, así un sensor eliminado no resucita al reiniciar.
+
+```bash
+curl -X POST http://localhost:8081/api/sensores -H "Content-Type: application/json" \
+  -d '{"id":"TMP-SUR-06","variable":"temperatura","sede":"Sur","salon":"Salon 104","valorBase":23.0}'
+curl -X DELETE http://localhost:8081/api/sensores/TMP-SUR-06
+```
+
+
 Ver el flujo en vivo durante la demo:
 
 ```bash
@@ -154,18 +200,18 @@ SistemaMonitoreoIoT/
 │   └── src/main/java/com/campus/monitoring/
 │       ├── config/MqttBus.java             # bus MQTT + colas salida/entrada
 │       ├── cola/                           # colas duraderas (outbox/inbox)
-│       ├── sensor/SensorSimulator.java     # 12 sensores de la Tabla 1
+│       ├── sensor/SensorSimulator.java     # catalogo desde BD + ordenes de falla
 │       ├── recepcion/RecepcionService.java # valida formato (HDU-02/03)
-│       ├── procesamiento/                  # STUB — ver tareas Ronda 2
+│       ├── procesamiento/                  # STUB + caida simulada (demo)
 │       ├── persistencia/                   # entidades + unico acceso a BD
-│       └── api/PanelApiController.java     # endpoints del tablero
+│       └── api/                            # Panel, Demo (ruleta) y CRUD sensores
 └── frontend/
     ├── nginx.conf              # SPA + proxy inverso al backend
     ├── vercel.json             # rewrites /api -> Render (PLACEHOLDER)
     └── src/
         ├── api.js              # capa de acceso a la API
-        ├── App.jsx             # layout con sidebar
-        └── components/         # Dashboard, Sensores, ControlFallas
+        ├── App.jsx             # layout con sidebar + banner de fallas
+        └── components/         # Dashboard, Sensores, ControlFallas, BannerFallas
 ```
 
 ## Despliegue en AWS (EC2 — gratis 12 meses)
@@ -328,9 +374,9 @@ tocar y la señal de "listo".
 | 1 | Validar rangos por variable y detectar duplicados antes de reenviar | HDU-03, E3 | `backend/.../procesamiento/ProcesamientoService.java` (buscar `TODO(Ronda 2)`) | Publicar un valor de 999 °C con `mosquitto_pub` y ver que NO aparece en `/api/mediciones` pero sí en `/api/errores` |
 | 2 | Evaluador de umbrales (900 ppm) → publicar en `interno/alertas` | HDU-06, E10 | `ProcesamientoService.java` | Superar 900 ppm y ver la alerta en `/api/errores` o nuevo `/api/alertas` |
 | 3 | Servicio de monitoreo: heartbeat cada 30 s, marcar inactivo a los 120 s (`HEARTBEAT_SEGUNDOS`) | HDU-04, E1 | nuevo `backend/.../monitoreo/MonitoreoService.java` | Detener un sensor y ver su badge "Desactualizado" en la tabla |
-| 4 | Endpoint `POST /api/demo/panic` y `POST /api/demo/restaurar` (elegir víctima al azar, publicar en `control/simulador/#`) | E1, E11 | nuevo `backend/.../demo/DemoController.java` + descomentar en `frontend/src/api.js` | Los botones del panel "Control de fallas" se activan |
-| 5 | Botones del panel con banner "qué falló / qué sigue operativo / cuenta regresiva" | E1 | `frontend/src/components/ControlFallas.jsx` (buscar `TODO(Ronda 2)`) | Click → banner → dashboard sigue moviéndose |
-| 6 | Toggle apagar/encender por sensor en la tabla | HDU-05 | `frontend/src/components/Sensores.jsx` (columna `Acción`) | Apagar TMP-SUR-01 y ver su gráfica congelada |
+| 4 | ~~Endpoint `POST /api/demo/panic` y `POST /api/demo/restaurar`~~ ✅ hecho | E1, E11 | `backend/.../api/DemoController.java` + `frontend/src/api.js` | Los botones del panel "Control de fallas" están activos |
+| 5 | ~~Botones del panel con banner "qué falló / qué sigue operativo / cuenta regresiva"~~ ✅ hecho | E1 | `frontend/src/components/ControlFallas.jsx` + `BannerFallas.jsx` | Click → banner global → dashboard sigue moviéndose |
+| 6 | ~~Toggle apagar/encender por sensor en la tabla~~ ✅ hecho (más CRUD) | HDU-05 | `frontend/src/components/Sensores.jsx` + `SensoresController.java` | Apagar TMP-SUR-01 y ver su gráfica congelada |
 | 7 | Gestión de usuarios y roles (RBAC: admin / comunidad / mantenimiento) | HDU-10, HDU-11, E5/E6 | nuevo `security/` + endpoints `/api/admin/**` | Usuario sin rol admin recibe 403 |
 | 8 | Reservas de biblioteca (50 cupos, sin superposiciones) | HDU-09 | nuevo `reservas/` + tabla `reservas` | Crear 51ava reserva y ver el rechazo |
 | 9 | Filtros del registro de errores (fecha, tipo, sensor) | HDU-07 | `PanelApiController.java` (`/api/errores` ya acepta `?tipo=`) | Completar el resto de filtros y probarlos |

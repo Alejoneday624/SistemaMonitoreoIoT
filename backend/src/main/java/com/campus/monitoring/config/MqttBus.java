@@ -338,6 +338,14 @@ public class MqttBus implements InitializingBean, DisposableBean {
             try {
                 sub.manejador().accept(m.getTopic(), m.getPayload());
                 cola.quitar(m.getId());
+            } catch (ComponenteCaidoException caido) {
+                // Demo de fallas: el componente esta fuera de servicio, no roto.
+                // El mensaje queda PENDIENTE (sin gastar reintentos ni FALLIDO)
+                // y se reintentara en el proximo tick; al restaurar, la cola se
+                // vacia en orden FIFO sin perdidas (E11).
+                log.warn("[MQTT] {} caido ({}); mensaje #{} pendiente hasta restaurar",
+                        clave, caido.getComponente(), m.getId());
+                return;
             } catch (Exception e) {
                 log.error("[MQTT] {} fallo con #{} ({}): {}",
                         clave, m.getId(), m.getTopic(), e.getMessage());

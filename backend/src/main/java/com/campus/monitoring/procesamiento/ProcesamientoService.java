@@ -6,6 +6,7 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
+import com.campus.monitoring.config.ComponenteCaidoException;
 import com.campus.monitoring.config.MqttBus;
 
 /**
@@ -20,6 +21,12 @@ import com.campus.monitoring.config.MqttBus;
  *  2. Detectar duplicados (sensorId + fecha) antes de reenviar.
  *  3. Evaluar umbrales configurables (HDU-12) y publicar eventos de alerta
  *     en interno/alertas cuando se supere el limite (ej. 900 ppm).
+ *
+ * DEMO DE FALLAS (E1/E11): el flag "caido" simula la caida de este
+ * componente interno. Mientras este caido, el manejador lanza
+ * ComponenteCaidoException: los mensajes NO se procesan pero tampoco se
+ * descartan ni agotan reintentos — quedan PENDIENTES en la cola de entrada
+ * (la cola del tablero crece) y al restaurar se vacian en orden.
  */
 @Component
 public class ProcesamientoService {
@@ -28,6 +35,9 @@ public class ProcesamientoService {
 
     private final MqttBus mqtt;
 
+    /** Caida simulada del componente (demo de fallas del panel) */
+    private volatile boolean caido = false;
+
     public ProcesamientoService(MqttBus mqtt) {
         this.mqtt = mqtt;
     }
@@ -35,9 +45,31 @@ public class ProcesamientoService {
     @EventListener(ApplicationReadyEvent.class)
     public void suscribir() {
         mqtt.suscribir("campus-procesamiento", "interno/validadas", (topic, mensaje) -> {
+            if (caido) {
+                // Componente fuera de servicio: el bus deja el mensaje
+                // PENDIENTE y reintenta en el proximo tick (ver MqttBus).
+                throw new ComponenteCaidoException("procesamiento");
+            }
             // STUB: passthrough hacia persistencia / monitoreo / alertas
             mqtt.publicar("interno/procesadas", mensaje);
             log.debug("[PROCESAMIENTO] Medicion derivada a interno/procesadas");
         });
+    }
+
+    /** Simula la caida del componente: deja de procesar, la cola crece */
+    public void caer() {
+        caido = true;
+        log.warn("[PROCESAMIENTO] Componente CAIDO por orden del panel: "
+                + "las mediciones se acumulan en cola hasta restaurar");
+    }
+
+    /** Restaura el componente: el proximo tick vacia la cola pendiente */
+    public void levantar() {
+        caido = false;
+        log.info("[PROCESAMIENTO] Componente restaurado: reanudando el flujo");
+    }
+
+    public boolean estaCaido() {
+        return caido;
     }
 }
