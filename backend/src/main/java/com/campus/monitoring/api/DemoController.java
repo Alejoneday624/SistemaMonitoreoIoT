@@ -21,20 +21,18 @@ import com.campus.monitoring.cola.ColaMensajes;
 import com.campus.monitoring.cola.ColaMensajesRepository;
 import com.campus.monitoring.config.MqttBus;
 import com.campus.monitoring.persistencia.PersistenciaService;
-import com.campus.monitoring.persistencia.Sensor;
-import com.campus.monitoring.persistencia.SensorRepository;
 import com.campus.monitoring.procesamiento.ProcesamientoService;
 import com.campus.monitoring.recepcion.RecepcionService;
-import com.campus.monitoring.sensor.SensorSimulator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
  * Ruleta de fallas del panel de control.
  *
- * POST /api/demo/panic     -> elige AL AZAR la victima: un sensor del
- *                             catalogo o cualquier servicio del flujo
+ * POST /api/demo/panic     -> elige AL AZAR un servicio del flujo
  *                             (recepcion, procesamiento, persistencia/BD,
- *                             broker MQTT) y lo deja fuera de servicio.
+ *                             broker MQTT) y lo deja fuera de servicio. Los
+ *                             sensores NO entran en el sorteo: se apagan uno
+ *                             a uno desde /api/sensores/{id}/apagar.
  * POST /api/demo/restaurar -> reactiva todo lo caido y drena las colas.
  * GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
  *                             se acumulo (para el banner del tablero).
@@ -53,39 +51,35 @@ public class DemoController {
     /** Sin falla activa */
     private static final String NINGUNA = null;
 
-    private final SensorSimulator simulador;
     private final RecepcionService recepcion;
     private final ProcesamientoService procesamiento;
     private final PersistenciaService persistencia;
-    private final SensorRepository sensores;
     private final ColaMensajesRepository colas;
     private final MqttBus mqtt;
     private final ObjectMapper json = new ObjectMapper();
 
     /**
      * Tipo de la falla activa:
-     * "SENSOR" | "RECEPCION" | "PROCESAMIENTO" | "PERSISTENCIA" | "MQTT"
+     * "RECEPCION" | "PROCESAMIENTO" | "PERSISTENCIA" | "MQTT"
      */
     private volatile String tipoCaido = NINGUNA;
-    /** Id del sensor caido o nombre del servicio */
+    /** Nombre del servicio caido */
     private volatile String victima = NINGUNA;
     private volatile Instant desde = null;
 
-    public DemoController(SensorSimulator simulador, RecepcionService recepcion,
+    public DemoController(RecepcionService recepcion,
                           ProcesamientoService procesamiento, PersistenciaService persistencia,
-                          SensorRepository sensores, ColaMensajesRepository colas, MqttBus mqtt) {
-        this.simulador = simulador;
+                          ColaMensajesRepository colas, MqttBus mqtt) {
         this.recepcion = recepcion;
         this.procesamiento = procesamiento;
         this.persistencia = persistencia;
-        this.sensores = sensores;
         this.colas = colas;
         this.mqtt = mqtt;
     }
 
     /**
-     * La ruleta: sortea entre un sensor del catalogo y cualquier servicio
-     * del flujo de datos. Si ya hay una falla activa, 409.
+     * La ruleta: sortea AL AZAR entre los servicios del flujo de datos.
+     * Si ya hay una falla activa, 409.
      */
     @PostMapping("/panic")
     public Map<String, Object> panic() {
@@ -95,58 +89,40 @@ public class DemoController {
                             + "). Restaura antes de girar la ruleta otra vez.");
         }
 
-        List<Sensor> candidatos = sensores.findAll().stream()
-                .filter(s -> !simulador.estadoApagados().containsKey(s.getId()))
-                .toList();
-
-        // La ruleta: un slot por sensor candidato + un slot por servicio.
+        // La ruleta: un slot por servicio del flujo
         List<String> servicios = List.of("RECEPCION", "PROCESAMIENTO", "PERSISTENCIA", "MQTT");
-        int slots = candidatos.size() + servicios.size();
-        int tiro = ThreadLocalRandom.current().nextInt(slots);
+        String servicio = servicios.get(ThreadLocalRandom.current().nextInt(servicios.size()));
 
         Map<String, Object> r = new LinkedHashMap<>();
-        if (tiro < candidatos.size()) {
-            Sensor victimaSensor = candidatos.get(tiro);
-            publicarOrden("apagar", victimaSensor.getId());
-            tipoCaido = "SENSOR";
-            victima = victimaSensor.getId();
-            r.put("tipo", "SENSOR");
-            r.put("victima", victima);
-            r.put("detalle", victimaSensor.getVariable() + " · " + victimaSensor.getSede()
-                    + " · " + victimaSensor.getSalon());
-            log.warn("[DEMO] Ruleta -> SENSOR {}", victima);
-        } else {
-            String servicio = servicios.get(tiro - candidatos.size());
-            switch (servicio) {
-                case "RECEPCION" -> {
-                    recepcion.caer();
-                    victima = "Recepcion";
-                    r.put("detalle", "Los mensajes no se validan: quedan en cola hasta restaurar");
-                }
-                case "PROCESAMIENTO" -> {
-                    procesamiento.caer();
-                    victima = "Procesamiento";
-                    r.put("detalle", "Las mediciones se acumulan en cola hasta restaurar");
-                }
-                case "PERSISTENCIA" -> {
-                    persistencia.caer();
-                    victima = "Base de datos";
-                    r.put("detalle", "Nada se guarda: los mensajes esperan en cola hasta restaurar");
-                }
-                case "MQTT" -> {
-                    mqtt.caerBroker();
-                    victima = "Broker MQTT";
-                    r.put("detalle", "Nada fluye por el bus: la cola de salida crece hasta restaurar");
-                }
-                default -> throw new IllegalStateException("servicio desconocido: " + servicio);
+        switch (servicio) {
+            case "RECEPCION" -> {
+                recepcion.caer();
+                victima = "Recepcion";
+                r.put("detalle", "Los mensajes no se validan: quedan en cola hasta restaurar");
             }
-            tipoCaido = servicio;
-            r.put("tipo", servicio);
-            r.put("victima", victima);
-            log.warn("[DEMO] Ruleta -> {} ({})", servicio, victima);
+            case "PROCESAMIENTO" -> {
+                procesamiento.caer();
+                victima = "Procesamiento";
+                r.put("detalle", "Las mediciones se acumulan en cola hasta restaurar");
+            }
+            case "PERSISTENCIA" -> {
+                persistencia.caer();
+                victima = "Base de datos";
+                r.put("detalle", "Nada se guarda: los mensajes esperan en cola hasta restaurar");
+            }
+            case "MQTT" -> {
+                mqtt.caerBroker();
+                victima = "Broker MQTT";
+                r.put("detalle", "Nada fluye por el bus: la cola de salida crece hasta restaurar");
+            }
+            default -> throw new IllegalStateException("servicio desconocido: " + servicio);
         }
+        tipoCaido = servicio;
+        r.put("tipo", servicio);
+        r.put("victima", victima);
         desde = Instant.now();
         r.put("desde", desde.toString());
+        log.warn("[DEMO] Ruleta -> {} ({})", servicio, victima);
         return r;
     }
 
