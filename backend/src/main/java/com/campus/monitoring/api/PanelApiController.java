@@ -9,6 +9,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.springframework.data.domain.PageRequest;
@@ -127,8 +128,12 @@ public class PanelApiController {
 
         // Los filtros se aplican EN LA BASE DE DATOS (WHERE + ORDER BY), no en
         // memoria: cualquier combinacion de tipo/sensor/fechas viaja en una sola
-        // query y la BD ordena por fecha descendente.
-        return errores.buscarConFiltros(filtroTipo, filtroSensor, limiteDesde, limiteHasta);
+        // query y la BD ordena por fecha descendente. Los textos se normalizan a
+        // minusculas aqui porque la query compara LOWER(columna) = :param.
+        return errores.buscarConFiltros(
+                filtroTipo == null ? null : filtroTipo.toLowerCase(Locale.ROOT),
+                filtroSensor == null ? null : filtroSensor.toLowerCase(Locale.ROOT),
+                limiteDesde, limiteHasta);
     }
 
     private static String limpiar(String valor) {
