@@ -39,6 +39,14 @@ public class PanelApiController {
     /** Sensores sin datos recientes se marcan desactualizados (HDU-01) */
     private static final Duration VIGENCIA = Duration.ofSeconds(90);
 
+    /**
+     * Limites neutros que no excluyen ningun registro. Sustituyen a los nulos
+     * en GET /api/errores porque un parametro nulo sin contexto de tipo rompe
+     * la query en PostgreSQL ("could not determine data type of parameter").
+     */
+    private static final Instant SIN_DESDE = Instant.parse("0001-01-01T00:00:00Z");
+    private static final Instant SIN_HASTA = Instant.parse("9999-12-31T23:59:59Z");
+
     private final SensorRepository sensores;
     private final MedicionRepository mediciones;
     private final ErrorRegistroRepository errores;
@@ -126,14 +134,17 @@ public class PanelApiController {
             limiteHasta = parsearLimite(hasta.trim(), true);
         }
 
-        // Los filtros se aplican EN LA BASE DE DATOS (WHERE + ORDER BY), no en
-        // memoria: cualquier combinacion de tipo/sensor/fechas viaja en una sola
-        // query y la BD ordena por fecha descendente. Los textos se normalizan a
-        // minusculas aqui porque la query compara LOWER(columna) = :param.
+        // Nunca se envian nulos a la query: PostgreSQL no infiere el tipo de un
+        // parametro que solo aparece en "IS NULL" ("could not determine data
+        // type of parameter"). Cadena vacia = sin filtro de texto y los
+        // instantes extremos no excluyen ningun registro (sin filtro de fechas).
+        // Los textos viajan en minusculas porque la query compara
+        // LOWER(columna) = :param.
         return errores.buscarConFiltros(
-                filtroTipo == null ? null : filtroTipo.toLowerCase(Locale.ROOT),
-                filtroSensor == null ? null : filtroSensor.toLowerCase(Locale.ROOT),
-                limiteDesde, limiteHasta);
+                filtroTipo == null ? "" : filtroTipo.toLowerCase(Locale.ROOT),
+                filtroSensor == null ? "" : filtroSensor.toLowerCase(Locale.ROOT),
+                limiteDesde != null ? limiteDesde : SIN_DESDE,
+                limiteHasta != null ? limiteHasta : SIN_HASTA);
     }
 
     private static String limpiar(String valor) {

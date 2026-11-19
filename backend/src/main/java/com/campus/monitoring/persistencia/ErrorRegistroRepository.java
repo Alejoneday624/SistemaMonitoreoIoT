@@ -11,20 +11,26 @@ public interface ErrorRegistroRepository extends JpaRepository<ErrorRegistro, Lo
 
     /**
      * Filtros combinables (Tarea 9 — HDU-07) resueltos EN LA BASE DE DATOS:
-     * cualquier subconjunto de tipo / sensor / rango de fechas puede venir nulo,
-     * y solo se agregan las condiciones pedidas. Ordena por fecha descendente.
+     * tipo, sensor y rango de fechas en una sola query, con ORDER BY en la BD.
      *
-     * Nota: los textos llegan ya en minusculas (el controlador normaliza) y se
-     * comparan con LOWER(columna) = :param. No se usa LOWER(:param) porque
-     * Hibernate ligaria un nulo sin tipo y PostgreSQL fallaria con
-     * "function lower(bytea) does not exist".
+     * La consulta NO admite parametros nulos. Dos motivos comprobados contra
+     * PostgreSQL:
+     *  - LOWER(:param) con un nulo liga el parametro como bytea ->
+     *    "function lower(bytea) does not exist".
+     *  - "param IS NULL" no aporta tipo al parametro -> Hibernate lo envia sin
+     *    inferir y Postgres falla con "could not determine data type of parameter".
+     *
+     * Por eso el controlador envia siempre valores "neutros" en lugar de nulos:
+     * cadena vacia = sin filtro de texto, instantes extremos = sin filtro de
+     * fechas. Aqui solo se comparan, y las comparaciones si dan tipo a cada
+     * parametro (? = '' es text, e.fecha >= ? es timestamp).
      */
     @Query("""
             SELECT e FROM ErrorRegistro e
-            WHERE (:tipo IS NULL OR LOWER(e.tipo) = :tipo)
-              AND (:sensorId IS NULL OR LOWER(e.sensorId) = :sensorId)
-              AND (:desde IS NULL OR e.fecha >= :desde)
-              AND (:hasta IS NULL OR e.fecha <= :hasta)
+            WHERE (:tipo = '' OR LOWER(e.tipo) = :tipo)
+              AND (:sensorId = '' OR LOWER(e.sensorId) = :sensorId)
+              AND e.fecha >= :desde
+              AND e.fecha <= :hasta
             ORDER BY e.fecha DESC
             """)
     List<ErrorRegistro> buscarConFiltros(@Param("tipo") String tipo,

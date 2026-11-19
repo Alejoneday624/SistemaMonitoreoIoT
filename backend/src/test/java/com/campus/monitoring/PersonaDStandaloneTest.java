@@ -159,9 +159,9 @@ class PersonaDStandaloneTest {
             Instant desde = inv.getArgument(2);
             Instant hasta = inv.getArgument(3);
             return bdErrores.stream()
-                    .filter(e -> tipo == null
+                    .filter(e -> tipo == null || tipo.isEmpty()
                             || (e.getTipo() != null && e.getTipo().equalsIgnoreCase(tipo)))
-                    .filter(e -> sensorId == null
+                    .filter(e -> sensorId == null || sensorId.isEmpty()
                             || (e.getSensorId() != null && e.getSensorId().equalsIgnoreCase(sensorId)))
                     .filter(e -> desde == null
                             || (e.getFecha() != null && !e.getFecha().isBefore(desde)))
