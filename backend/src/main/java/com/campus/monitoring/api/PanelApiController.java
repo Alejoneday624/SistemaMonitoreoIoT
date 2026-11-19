@@ -125,27 +125,10 @@ public class PanelApiController {
             limiteHasta = parsearLimite(hasta.trim(), true);
         }
 
-        // Caso rapido sin filtros adicionales
-        if (filtroTipo == null && filtroSensor == null && limiteDesde == null && limiteHasta == null) {
-            return errores.findAllByOrderByFechaDesc();
-        }
-        if (filtroTipo != null && filtroSensor == null && limiteDesde == null && limiteHasta == null) {
-            return errores.findByTipoOrderByFechaDesc(filtroTipo);
-        }
-
-        final Instant fDesde = limiteDesde;
-        final Instant fHasta = limiteHasta;
-
-        return errores.findAllByOrderByFechaDesc().stream()
-                .filter(e -> filtroTipo == null
-                        || (e.getTipo() != null && e.getTipo().equalsIgnoreCase(filtroTipo)))
-                .filter(e -> filtroSensor == null
-                        || (e.getSensorId() != null && e.getSensorId().equalsIgnoreCase(filtroSensor)))
-                .filter(e -> fDesde == null
-                        || (e.getFecha() != null && !e.getFecha().isBefore(fDesde)))
-                .filter(e -> fHasta == null
-                        || (e.getFecha() != null && !e.getFecha().isAfter(fHasta)))
-                .toList();
+        // Los filtros se aplican EN LA BASE DE DATOS (WHERE + ORDER BY), no en
+        // memoria: cualquier combinacion de tipo/sensor/fechas viaja en una sola
+        // query y la BD ordena por fecha descendente.
+        return errores.buscarConFiltros(filtroTipo, filtroSensor, limiteDesde, limiteHasta);
     }
 
     private static String limpiar(String valor) {

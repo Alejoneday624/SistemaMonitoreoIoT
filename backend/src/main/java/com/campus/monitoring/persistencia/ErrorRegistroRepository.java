@@ -4,15 +4,29 @@ import java.time.Instant;
 import java.util.List;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 public interface ErrorRegistroRepository extends JpaRepository<ErrorRegistro, Long> {
 
-    List<ErrorRegistro> findAllByOrderByFechaDesc();
-
-    List<ErrorRegistro> findByTipoOrderByFechaDesc(String tipo);
-
-    List<ErrorRegistro> findBySensorIdOrderByFechaDesc(String sensorId);
-
-    List<ErrorRegistro> findByFechaBetweenOrderByFechaDesc(Instant desde, Instant hasta);
+    /**
+     * Filtros combinables (Tarea 9 — HDU-07) resueltos EN LA BASE DE DATOS:
+     * cualquier subconjunto de tipo / sensor / rango de fechas puede venir nulo,
+     * y solo se agregan las condiciones pedidas. Ordena por fecha descendente.
+     *
+     * Antes la filtraba la API cargando TODOS los registros y recorriendolos en
+     * memoria; ahora el WHERE se aplica en SQL (y aprovecha los indices).
+     */
+    @Query("""
+            SELECT e FROM ErrorRegistro e
+            WHERE (:tipo IS NULL OR LOWER(e.tipo) = LOWER(:tipo))
+              AND (:sensorId IS NULL OR LOWER(e.sensorId) = LOWER(:sensorId))
+              AND (:desde IS NULL OR e.fecha >= :desde)
+              AND (:hasta IS NULL OR e.fecha <= :hasta)
+            ORDER BY e.fecha DESC
+            """)
+    List<ErrorRegistro> buscarConFiltros(@Param("tipo") String tipo,
+                                         @Param("sensorId") String sensorId,
+                                         @Param("desde") Instant desde,
+                                         @Param("hasta") Instant hasta);
 }
-

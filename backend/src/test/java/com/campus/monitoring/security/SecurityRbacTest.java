@@ -28,6 +28,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *
  * Hereda de StackSpringTest sin anotaciones adicionales de contexto para reutilizar
  * el unico contexto de Spring (y el unico MqttBus) de toda la suite.
+ *
+ * La identificacion en /api/admin/** es SOLO por Authorization: Basic; las
+ * cabeceras declarativas (X-Usuario / X-Rol) fueron eliminadas porque permitian
+ * hacerse pasar por ADMIN sin credenciales.
  */
 class SecurityRbacTest extends StackSpringTest {
 
@@ -50,30 +54,45 @@ class SecurityRbacTest extends StackSpringTest {
                 .build();
     }
 
+    /** Cabecera Authorization: Basic generada para las pruebas */
+    private static String basic(String usuario, String clave) {
+        return "Basic " + Base64.getEncoder()
+                .encodeToString((usuario + ":" + clave).getBytes(StandardCharsets.UTF_8));
+    }
+
     @Test
     void usuarioSinRolAdminRecibe403EnEndpointsAdmin() throws Exception {
-        // 1. Sin cabeceras de autenticacion -> 403 Forbidden
+        // 1. Sin cabecera de autenticacion -> 403 Forbidden
         mvc.perform(get("/api/admin/usuarios"))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.status").value(403));
 
-        // 2. Con usuario de rol COMUNIDAD -> 403 Forbidden
+        // 2. Basic valido de usuario rol COMUNIDAD -> 403 Forbidden
         mvc.perform(get("/api/admin/usuarios")
-                        .header("X-Usuario", "comunidad"))
+                        .header("Authorization", basic("comunidad", "comunidad123")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.rolActual").value("COMUNIDAD"));
 
-        // 3. Con usuario de rol MANTENIMIENTO -> 403 Forbidden
+        // 3. Basic valido de usuario rol MANTENIMIENTO -> 403 Forbidden
         mvc.perform(get("/api/admin/usuarios")
-                        .header("X-Usuario", "mantenimiento"))
+                        .header("Authorization", basic("mantenimiento", "mant123")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.rolActual").value("MANTENIMIENTO"));
 
-        // 4. Con cabecera X-Rol explicita no-admin -> 403 Forbidden
+        // 4. Cabeceras declarativas antiguas (X-Rol / X-Usuario) -> 403:
+        //    ya no autentican, era una puerta trasera sin credenciales.
         mvc.perform(post("/api/admin/usuarios")
-                        .header("X-Rol", "COMUNIDAD")
+                        .header("X-Rol", "ADMIN")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"intruso\",\"rol\":\"ADMIN\"}"))
+                        .content("{\"username\":\"intruso\",\"password\":\"x\",\"rol\":\"ADMIN\"}"))
+                .andExpect(status().isForbidden());
+
+        mvc.perform(get("/api/admin/usuarios").header("X-Usuario", "admin"))
+                .andExpect(status().isForbidden());
+
+        // 5. Basic con password incorrecto -> 403
+        mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("admin", "no-es-la-clave")))
                 .andExpect(status().isForbidden());
     }
 
@@ -81,7 +100,7 @@ class SecurityRbacTest extends StackSpringTest {
     void adminPuedeListarCrearYCambiarRolDeUsuarios() throws Exception {
         // 1. Admin lista los usuarios semilla (HDU-10)
         mvc.perform(get("/api/admin/usuarios")
-                        .header("X-Usuario", "admin"))
+                        .header("Authorization", basic("admin", "admin123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
 
@@ -96,7 +115,7 @@ class SecurityRbacTest extends StackSpringTest {
                 }
                 """;
         String respuestaCrear = mvc.perform(post("/api/admin/usuarios")
-                        .header("X-Usuario", "admin")
+                        .header("Authorization", basic("admin", "admin123"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(bodyCrear))
                 .andExpect(status().isCreated())
@@ -109,29 +128,27 @@ class SecurityRbacTest extends StackSpringTest {
 
         // Mientras es COMUNIDAD, no puede entrar a /api/admin/usuarios -> 403
         mvc.perform(get("/api/admin/usuarios")
-                        .header("X-Usuario", "juan.perez"))
+                        .header("Authorization", basic("juan.perez", "claveSegura")))
                 .andExpect(status().isForbidden());
 
         // 3. Admin cambia su rol a MANTENIMIENTO (HDU-11)
         mvc.perform(put("/api/admin/usuarios/" + idUsuario + "/rol")
-                        .header("X-Usuario", "admin")
+                        .header("Authorization", basic("admin", "admin123"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"rol\":\"MANTENIMIENTO\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rol").value("MANTENIMIENTO"));
 
         // 4. Admin lo promueve a ADMIN (HDU-11) y ahora si tiene acceso 200 OK
-        String basicAdmin = Base64.getEncoder()
-                .encodeToString("admin:admin123".getBytes(StandardCharsets.UTF_8));
         mvc.perform(put("/api/admin/usuarios/" + idUsuario + "/rol")
-                        .header("Authorization", "Basic " + basicAdmin)
+                        .header("Authorization", basic("admin", "admin123"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"rol\":\"ADMIN\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rol").value("ADMIN"));
 
         mvc.perform(get("/api/admin/usuarios")
-                        .header("X-Usuario", "juan.perez"))
+                        .header("Authorization", basic("juan.perez", "claveSegura")))
                 .andExpect(status().isOk());
 
         // 5. Login valida credenciales y devuelve el rol actualizado
@@ -141,12 +158,44 @@ class SecurityRbacTest extends StackSpringTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.rol").value("ADMIN"));
 
-        // 6. Limpieza del usuario de prueba
+        // 6. No puede autoeliminarse (queda el admin semilla, pero el propio
+        //    usuario no debe poder borrarse a si mismo) -> 409
         mvc.perform(delete("/api/admin/usuarios/" + idUsuario)
-                        .header("X-Usuario", "admin"))
+                        .header("Authorization", basic("juan.perez", "claveSegura")))
+                .andExpect(status().isConflict());
+
+        // 7. El admin si lo elimina -> 204
+        mvc.perform(delete("/api/admin/usuarios/" + idUsuario)
+                        .header("Authorization", basic("admin", "admin123")))
                 .andExpect(status().isNoContent());
 
         assertThat(usuarios.findById(idUsuario)).isEmpty();
     }
-}
 
+    @Test
+    void noSePuedeEliminarAlUltimoAdministradorActivo() throws Exception {
+        // Listar usuarios y quedarse con todos los ADMIN distintos del semilla
+        String lista = mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("admin", "admin123")))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        JsonNode todos = json.readTree(lista);
+        long admins = 0;
+        long idAdminSemilla = -1;
+        for (JsonNode u : todos) {
+            if ("ADMIN".equals(u.get("rol").asText()) && u.get("activo").asBoolean()) {
+                admins++;
+                idAdminSemilla = u.get("id").asLong();
+            }
+        }
+        // Solo existe el admin semilla -> no se puede borrar
+        assertThat(admins).isEqualTo(1);
+
+        mvc.perform(delete("/api/admin/usuarios/" + idAdminSemilla)
+                        .header("Authorization", basic("admin", "admin123")))
+                .andExpect(status().isConflict());
+
+        assertThat(usuarios.findById(idAdminSemilla)).isPresent();
+    }
+}

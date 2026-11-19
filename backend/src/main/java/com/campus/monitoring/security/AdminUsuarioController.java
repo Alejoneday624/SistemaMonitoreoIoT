@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
+import jakarta.servlet.http.HttpServletRequest;
+
 /**
  * Endpoints de administracion de usuarios y roles (Tarea 7 — HDU-10, HDU-11, E5/E6).
  *
@@ -69,10 +71,11 @@ public class AdminUsuarioController {
         return usuarioService.cambiarEstado(id, activo);
     }
 
-    /** Eliminar un usuario por ID */
+    /** Eliminar un usuario por ID (no autoeliminacion ni borrar el ultimo ADMIN) */
     @DeleteMapping("/admin/usuarios/{id}")
-    public ResponseEntity<Void> eliminarUsuario(@PathVariable Long id) {
-        usuarioService.eliminar(id);
+    public ResponseEntity<Void> eliminarUsuario(@PathVariable Long id, HttpServletRequest req) {
+        Object solicitante = req.getAttribute(RbacFilter.ATTR_USUARIO);
+        usuarioService.eliminar(id, solicitante == null ? null : String.valueOf(solicitante));
         return ResponseEntity.noContent().build();
     }
 

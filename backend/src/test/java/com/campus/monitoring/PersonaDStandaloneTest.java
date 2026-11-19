@@ -153,13 +153,20 @@ class PersonaDStandaloneTest {
 
         // 3. Repositorio en memoria para Errores (Tarea 9)
         ErrorRegistroRepository errorRepo = mock(ErrorRegistroRepository.class);
-        when(errorRepo.findAllByOrderByFechaDesc()).thenAnswer(inv -> bdErrores.stream()
-                .sorted(Comparator.comparing(ErrorRegistro::getFecha).reversed())
-                .toList());
-        when(errorRepo.findByTipoOrderByFechaDesc(any())).thenAnswer(inv -> {
-            String t = inv.getArgument(0);
+        when(errorRepo.buscarConFiltros(any(), any(), any(), any())).thenAnswer(inv -> {
+            String tipo = inv.getArgument(0);
+            String sensorId = inv.getArgument(1);
+            Instant desde = inv.getArgument(2);
+            Instant hasta = inv.getArgument(3);
             return bdErrores.stream()
-                    .filter(e -> t.equalsIgnoreCase(e.getTipo()))
+                    .filter(e -> tipo == null
+                            || (e.getTipo() != null && e.getTipo().equalsIgnoreCase(tipo)))
+                    .filter(e -> sensorId == null
+                            || (e.getSensorId() != null && e.getSensorId().equalsIgnoreCase(sensorId)))
+                    .filter(e -> desde == null
+                            || (e.getFecha() != null && !e.getFecha().isBefore(desde)))
+                    .filter(e -> hasta == null
+                            || (e.getFecha() != null && !e.getFecha().isAfter(hasta)))
                     .sorted(Comparator.comparing(ErrorRegistro::getFecha).reversed())
                     .toList();
         });
@@ -175,44 +182,69 @@ class PersonaDStandaloneTest {
                 .build();
     }
 
+    /** Cabecera Authorization: Basic generada para las pruebas de RBAC */
+    private static String basic(String usuario, String clave) {
+        return "Basic " + Base64.getEncoder()
+                .encodeToString((usuario + ":" + clave).getBytes(StandardCharsets.UTF_8));
+    }
+
     @Test
     void tarea7_rbacBloqueaNoAdminYPermiteGestionCompletaAlAdmin() throws Exception {
-        // Sin rol -> 403
+        // Sin credenciales -> 403
         mvc.perform(get("/api/admin/usuarios"))
                 .andExpect(status().isForbidden());
 
-        // Rol COMUNIDAD -> 403
-        mvc.perform(get("/api/admin/usuarios").header("X-Usuario", "comunidad"))
+        // Rol COMUNIDAD (Basic valido) -> 403
+        mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("comunidad", "comunidad123")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.rolActual").value("COMUNIDAD"));
 
-        // Rol MANTENIMIENTO -> 403
-        mvc.perform(get("/api/admin/usuarios").header("X-Usuario", "mantenimiento"))
+        // Rol MANTENIMIENTO (Basic valido) -> 403
+        mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("mantenimiento", "mant123")))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.rolActual").value("MANTENIMIENTO"));
 
-        // Rol ADMIN -> 200 OK con los 3 usuarios semilla
+        // Cabeceras declarativas antiguas (X-Usuario / X-Rol) ya NO autentican:
+        // cualquiera podia mandarlas desde Postman y entrar sin clave.
         mvc.perform(get("/api/admin/usuarios").header("X-Usuario", "admin"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/usuarios").header("X-Rol", "ADMIN"))
+                .andExpect(status().isForbidden());
+
+        // Rol ADMIN (Basic valido) -> 200 OK con los 3 usuarios semilla
+        mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("admin", "admin123")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$", hasSize(3)));
 
-        // Crear usuario y cambiarle rol con Basic Auth de admin
-        String basicAdmin = Base64.getEncoder()
-                .encodeToString("admin:admin123".getBytes(StandardCharsets.UTF_8));
+        // Password incorrecto -> 403 (no se entra por fuerza bruta con Basic)
+        mvc.perform(get("/api/admin/usuarios")
+                        .header("Authorization", basic("admin", "clave-mala")))
+                .andExpect(status().isForbidden());
 
+        // Crear usuario y cambiarle rol con Basic Auth de admin
         mvc.perform(post("/api/admin/usuarios")
-                        .header("Authorization", "Basic " + basicAdmin)
+                        .header("Authorization", basic("admin", "admin123"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"username\":\"nuevo\",\"nombre\":\"Nuevo\",\"rol\":\"COMUNIDAD\"}"))
+                        .content("{\"username\":\"nuevo\",\"nombre\":\"Nuevo\",\"password\":\"clave123\",\"rol\":\"COMUNIDAD\"}"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.rol").value("COMUNIDAD"));
+
+        // Sin password ya no se crea (antes se asignaba "campus123" por defecto)
+        mvc.perform(post("/api/admin/usuarios")
+                        .header("Authorization", basic("admin", "admin123"))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"username\":\"sin-clave\",\"rol\":\"COMUNIDAD\"}"))
+                .andExpect(status().isBadRequest());
 
         Long nuevoId = bdUsuarios.stream()
                 .filter(u -> "nuevo".equals(u.getUsername()))
                 .findFirst().orElseThrow().getId();
 
         mvc.perform(put("/api/admin/usuarios/" + nuevoId + "/rol")
-                        .header("X-Usuario", "admin")
+                        .header("Authorization", basic("admin", "admin123"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"rol\":\"ADMIN\"}"))
                 .andExpect(status().isOk())

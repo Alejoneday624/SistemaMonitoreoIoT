@@ -3,6 +3,7 @@ package com.campus.monitoring.security;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
@@ -74,8 +75,12 @@ public class UsuarioService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Rol invalido. Valores permitidos: ADMIN, MANTENIMIENTO, COMUNIDAD");
         }
+        if (password == null || password.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "El campo password es obligatorio (ya no se asigna una clave por defecto)");
+        }
         String nombreFinal = (nombre == null || nombre.isBlank()) ? limpio : nombre.trim();
-        String claveFinal = (password == null || password.isBlank()) ? "campus123" : password;
+        String claveFinal = password;
         Usuario nuevo = new Usuario(limpio, nombreFinal, email, hashPassword(claveFinal), rol);
         return usuarios.save(nuevo);
     }
@@ -101,26 +106,101 @@ public class UsuarioService {
         return usuarios.save(u);
     }
 
+    /**
+     * Elimina un usuario aplicando dos salvaguardas:
+     *  1. Nadie puede eliminarse a si mismo (evita quedarse sin ADMIN operativo).
+     *  2. No se puede eliminar al ultimo administrador ACTIVO del sistema.
+     *
+     * @param solicitante username autenticado en la peticion (atributo rbacUsuario), o null
+     */
     @Transactional
-    public void eliminar(Long id) {
-        if (!usuarios.existsById(id)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado: " + id);
+    public void eliminar(Long id, String solicitante) {
+        Usuario objetivo = usuarios.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Usuario no encontrado: " + id));
+
+        if (solicitante != null && solicitante.equalsIgnoreCase(objetivo.getUsername())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "No puedes eliminar tu propio usuario");
         }
+
+        if (objetivo.getRol() == Rol.ADMIN) {
+            boolean quedaOtroAdminActivo = usuarios.findAllByOrderByIdAsc().stream()
+                    .anyMatch(u -> !id.equals(u.getId()) && u.getRol() == Rol.ADMIN && u.isActivo());
+            if (!quedaOtroAdminActivo) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "No se puede eliminar al ultimo administrador activo del sistema");
+            }
+        }
+
         usuarios.deleteById(id);
     }
 
+    /**
+     * Autentica contra la BD. Acepta hashes actuales (SHA-256 con salt, formato
+     * "salt$hash") y hashes legados sin salt generados por versiones anteriores;
+     * si la clave es correcta y el hash es legado, se re-escriba con salt.
+     */
+    @Transactional
     public Optional<Usuario> autenticar(String username, String password) {
         if (username == null || password == null) {
             return Optional.empty();
         }
-        return buscarPorUsername(username)
-                .filter(Usuario::isActivo)
-                .filter(u -> u.getPasswordHash().equals(hashPassword(password)));
+        Optional<Usuario> encontrado = buscarPorUsername(username).filter(Usuario::isActivo);
+        if (encontrado.isEmpty()) {
+            return Optional.empty();
+        }
+        Usuario u = encontrado.get();
+        if (!verificarPassword(password, u.getPasswordHash())) {
+            return Optional.empty();
+        }
+        // Migracion transparente del hash antiguo (sin salt) al formato salteado
+        if (!u.getPasswordHash().contains("$")) {
+            u.setPasswordHash(hashPassword(password));
+            usuarios.save(u);
+        }
+        return Optional.of(u);
     }
 
+    /** Tamanio del salt en bytes (32 caracteres hex en el hash) */
+    private static final int SALT_BYTES = 16;
+
+    /**
+     * SHA-256 con salt aleatorio: devuelve "saltHex$hashHex" (32+1+64 = 97 <= 128
+     * de la columna password_hash).
+     */
     public static String hashPassword(String raw) {
+        byte[] salt = new byte[SALT_BYTES];
+        new SecureRandom().nextBytes(salt);
+        return HexFormat.of().formatHex(salt) + "$" + sha256Hex(salt, raw);
+    }
+
+    /**
+     * Verifica una clave en claro contra el hash almacenado. Soporta el formato
+     * salteado ("salt$hash") y el legado (solo hash hex sin salt).
+     * La comparacion es en tiempo constante.
+     */
+    public static boolean verificarPassword(String raw, String almacenado) {
+        if (raw == null || almacenado == null || almacenado.isBlank()) {
+            return false;
+        }
+        int separador = almacenado.indexOf('$');
+        if (separador > 0) {
+            byte[] salt = HexFormat.of().parseHex(almacenado.substring(0, separador));
+            String esperado = almacenado.substring(separador + 1);
+            return MessageDigest.isEqual(esperado.getBytes(StandardCharsets.UTF_8),
+                    sha256Hex(salt, raw).getBytes(StandardCharsets.UTF_8));
+        }
+        // Hash legado: SHA-256 sin salt (version anterior del proyecto)
+        return MessageDigest.isEqual(almacenado.getBytes(StandardCharsets.UTF_8),
+                sha256Hex(null, raw).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String sha256Hex(byte[] salt, String raw) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");
+            if (salt != null) {
+                md.update(salt);
+            }
             byte[] digest = md.digest(raw.getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest);
         } catch (NoSuchAlgorithmException e) {
