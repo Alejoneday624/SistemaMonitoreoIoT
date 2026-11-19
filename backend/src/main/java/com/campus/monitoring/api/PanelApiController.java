@@ -2,16 +2,22 @@ package com.campus.monitoring.api;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import org.springframework.data.domain.PageRequest;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import com.campus.monitoring.persistencia.ErrorRegistro;
 import com.campus.monitoring.persistencia.ErrorRegistroRepository;
@@ -83,13 +89,100 @@ public class PanelApiController {
         return mediciones.findByVariableOrderByFechaDesc(variable, PageRequest.of(0, top));
     }
 
-    /** Registro de errores con filtro por tipo (HDU-07) */
+    /**
+     * Registro de errores con filtros combinables por tipo, sensor y fecha (Tarea 9 — HDU-07).
+     *
+     * Parametros soportados (todos opcionales y combinables):
+     * - tipo: p.ej. MEDICION_INVALIDA, SENSOR_INACTIVO, ERROR_COMUNICACION
+     * - sensorId (o alias sensor): p.ej. TMP-SUR-01
+     * - fecha: dia en formato YYYY-MM-DD (filtra todo ese dia en UTC)
+     * - desde / hasta: rango de fechas en formato YYYY-MM-DD o ISO-8601 Instant
+     */
     @GetMapping("/errores")
-    public List<ErrorRegistro> errores(@RequestParam(required = false) String tipo) {
-        if (tipo == null || tipo.isBlank()) {
+    public List<ErrorRegistro> errores(
+            @RequestParam(required = false) String tipo,
+            @RequestParam(required = false) String sensorId,
+            @RequestParam(required = false) String sensor,
+            @RequestParam(required = false) String fecha,
+            @RequestParam(required = false) String desde,
+            @RequestParam(required = false) String hasta) {
+
+        String filtroTipo = limpiar(tipo);
+        String filtroSensor = limpiar(sensorId) != null ? limpiar(sensorId) : limpiar(sensor);
+
+        Instant limiteDesde = null;
+        Instant limiteHasta = null;
+
+        if (limpiar(fecha) != null) {
+            Instant[] rangoDia = parsearDiaOInstante(fecha.trim());
+            limiteDesde = rangoDia[0];
+            limiteHasta = rangoDia[1];
+        }
+        if (limpiar(desde) != null) {
+            limiteDesde = parsearLimite(desde.trim(), false);
+        }
+        if (limpiar(hasta) != null) {
+            limiteHasta = parsearLimite(hasta.trim(), true);
+        }
+
+        // Caso rapido sin filtros adicionales
+        if (filtroTipo == null && filtroSensor == null && limiteDesde == null && limiteHasta == null) {
             return errores.findAllByOrderByFechaDesc();
         }
-        return errores.findByTipoOrderByFechaDesc(tipo);
+        if (filtroTipo != null && filtroSensor == null && limiteDesde == null && limiteHasta == null) {
+            return errores.findByTipoOrderByFechaDesc(filtroTipo);
+        }
+
+        final Instant fDesde = limiteDesde;
+        final Instant fHasta = limiteHasta;
+
+        return errores.findAllByOrderByFechaDesc().stream()
+                .filter(e -> filtroTipo == null
+                        || (e.getTipo() != null && e.getTipo().equalsIgnoreCase(filtroTipo)))
+                .filter(e -> filtroSensor == null
+                        || (e.getSensorId() != null && e.getSensorId().equalsIgnoreCase(filtroSensor)))
+                .filter(e -> fDesde == null
+                        || (e.getFecha() != null && !e.getFecha().isBefore(fDesde)))
+                .filter(e -> fHasta == null
+                        || (e.getFecha() != null && !e.getFecha().isAfter(fHasta)))
+                .toList();
+    }
+
+    private static String limpiar(String valor) {
+        return (valor == null || valor.isBlank()) ? null : valor.trim();
+    }
+
+    private static Instant[] parsearDiaOInstante(String texto) {
+        try {
+            LocalDate dia = LocalDate.parse(texto);
+            Instant inicioDia = dia.atStartOfDay(ZoneOffset.UTC).toInstant();
+            Instant finDia = dia.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().minusNanos(1);
+            return new Instant[]{inicioDia, finDia};
+        } catch (DateTimeParseException ignored) {
+        }
+        Instant instante = parsearLimite(texto, false);
+        return new Instant[]{instante, instante};
+    }
+
+    private static Instant parsearLimite(String texto, boolean finDeDiaSiSoloFecha) {
+        try {
+            return Instant.parse(texto);
+        } catch (DateTimeParseException ignored) {
+        }
+        try {
+            return LocalDateTime.parse(texto).toInstant(ZoneOffset.UTC);
+        } catch (DateTimeParseException ignored) {
+        }
+        try {
+            LocalDate dia = LocalDate.parse(texto);
+            if (finDeDiaSiSoloFecha) {
+                return dia.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant().minusNanos(1);
+            }
+            return dia.atStartOfDay(ZoneOffset.UTC).toInstant();
+        } catch (DateTimeParseException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Formato de fecha invalido: " + texto + " (use YYYY-MM-DD o ISO-8601)");
+        }
     }
 
     /** Resumen operativo: cobertura del monitoreo en este momento */
