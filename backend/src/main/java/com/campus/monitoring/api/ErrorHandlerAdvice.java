@@ -12,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
@@ -33,6 +34,33 @@ public class ErrorHandlerAdvice {
     /** URL del tablero, para enlazarla desde la pagina de error */
     @Value("${panel.url:http://localhost:8080}")
     private String urlPanel;
+
+    /**
+     * Motivo claro de los errores de negocio (400 / 401 / 404 / 409 ...).
+     *
+     * Spring responde por defecto el cuerpo standard SIN el campo "message"
+     * (server.error.include-message=never), y entonces el panel solo ve
+     * "Bad Request" o "Conflict" sin saber POR QUE: password obligatorio, no
+     * poder eliminar al ultimo administrador activo, cupos de reserva
+     * agotados, formato de fecha invalido, etc. Aqui se reenvia el motivo que
+     * ya preparan los servicios, sin filtrar otros tipos de excepcion.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Object> negocio(ResponseStatusException ex, HttpServletRequest req) {
+        int estado = ex.getStatusCode().value();
+        Map<String, Object> cuerpo = new LinkedHashMap<>();
+        cuerpo.put("timestamp", Instant.now().toString());
+        cuerpo.put("status", estado);
+        cuerpo.put("error", HttpStatus.valueOf(estado).getReasonPhrase());
+        String motivo = ex.getReason();
+        if (motivo != null && !motivo.isBlank()) {
+            cuerpo.put("message", motivo);
+        }
+        cuerpo.put("path", req.getRequestURI());
+        return ResponseEntity.status(estado)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(cuerpo);
+    }
 
     @ExceptionHandler({NoHandlerFoundException.class, NoResourceFoundException.class})
     public ResponseEntity<Object> noEncontrada(Exception ex, HttpServletRequest req) {

@@ -503,6 +503,100 @@
   gap: 10px;
 }
 
+/* ---------------- Sesion, login y secciones protegidas ---------------- */
+.candado {
+  margin-left: auto;
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.sesion {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.sesion-datos {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+  color: var(--text-h);
+}
+.chip-rol {
+  align-self: flex-start;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-border);
+  color: var(--text-h);
+  letter-spacing: 0.4px;
+}
+.chip {
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.login {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+}
+.login-tarjeta {
+  width: min(540px, 100%);
+  padding: 22px 24px;
+  border-color: var(--accent-border);
+  box-shadow: var(--shadow);
+}
+.login-nota {
+  font-size: 13px;
+  color: var(--text);
+  margin: 0 0 14px;
+}
+.login-tarjeta .aviso-error {
+  margin-bottom: 14px;
+}
+
+/* ---------------- Barra de cupos (reservas) ---------------- */
+.barra {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 6px 0 2px;
+}
+.barra-relleno {
+  height: 100%;
+  background: #12b886;
+  border-radius: 999px;
+  transition: width 0.3s;
+}
+.barra-relleno.barra-llena {
+  background: #fa5252;
+}
+
+/* Selector de rol dentro de la tabla de usuarios */
+.select-rol {
+  font: inherit;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+.select-rol:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
 /* ---------------- Responsivo ---------------- */
 @media (max-width: 820px) {
   .app {
