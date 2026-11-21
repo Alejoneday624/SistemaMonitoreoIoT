@@ -39,13 +39,29 @@ public class Sensor {
     @Column(name = "frecuencia_segundos")
     private Integer frecuenciaSegundos;
 
-    /** ACTIVO | INACTIVO (HDU-04) */
+    /** ACTIVO | INACTIVO | APAGADO (HDU-04 / HDU-05) */
     @Column(name = "estado", nullable = false, length = 20)
     private String estado = "ACTIVO";
 
     /** Fecha y hora de la ultima medicion recibida (base del heartbeat) */
     @Column(name = "ultima_medicion_en")
     private Instant ultimaMedicionEn;
+
+    /**
+     * Interruptor del sensor (T6 / HDU-05): true = publica, false = apagado
+     * por el administrador. Se persiste para sobrevivir reinicios y se cambia
+     * por una orden MQTT en control/simulador/orden.
+     */
+    @Column(name = "encendido")
+    private Boolean encendido = true;
+
+    /** Alta del sensor: da una gracia antes de exigirle el primer heartbeat */
+    @Column(name = "registrado_en")
+    private Instant registradoEn;
+
+    /** Ultimo cambio de encendido/apagado: reinicia la gracia del heartbeat */
+    @Column(name = "estado_cambiado_en")
+    private Instant estadoCambiadoEn;
 
     public Sensor() {
     }
@@ -56,6 +72,8 @@ public class Sensor {
         this.sede = sede;
         this.salon = salon;
         this.frecuenciaSegundos = frecuenciaSegundos;
+        this.registradoEn = Instant.now();
+        this.estadoCambiadoEn = this.registradoEn;
     }
 
     public String getId() {
@@ -126,5 +144,34 @@ public class Sensor {
 
     public void setUltimaMedicionEn(Instant ultimaMedicionEn) {
         this.ultimaMedicionEn = ultimaMedicionEn;
+    }
+
+    public Boolean getEncendido() {
+        return encendido;
+    }
+
+    public void setEncendido(Boolean encendido) {
+        this.encendido = encendido;
+    }
+
+    /** null en filas antiguas = encendido (compatibilidad con datos previos) */
+    public boolean estaEncendido() {
+        return !Boolean.FALSE.equals(encendido);
+    }
+
+    public Instant getRegistradoEn() {
+        return registradoEn;
+    }
+
+    public void setRegistradoEn(Instant registradoEn) {
+        this.registradoEn = registradoEn;
+    }
+
+    public Instant getEstadoCambiadoEn() {
+        return estadoCambiadoEn;
+    }
+
+    public void setEstadoCambiadoEn(Instant estadoCambiadoEn) {
+        this.estadoCambiadoEn = estadoCambiadoEn;
     }
 }

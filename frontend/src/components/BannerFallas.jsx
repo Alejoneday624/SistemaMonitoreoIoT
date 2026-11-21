@@ -67,10 +67,11 @@ function BannerFallas() {
 
   const esSensor = estado.tipo === 'SENSOR'
   const titulo = esSensor
-    ? `Sensor caido: ${estado.victima}`
-    : `Caido: ${NOMBRE_SERVICIO[estado.tipo] || estado.victima || 'servicio'}`
+    ? `Sensor caído: ${estado.victima}`
+    : `Caído: ${NOMBRE_SERVICIO[estado.tipo] || estado.victima || 'servicio'}`
+  const sinDatos = estado.segundosSinDatos ?? estado.segundosCaido
   const detalle = esSensor
-    ? `sin datos ${antiguedad(estado.segundosCaido)}`
+    ? `${estado.ubicacion ? `${estado.ubicacion} · ` : ''}sin datos ${antiguedad(sinDatos)}`
     : `cola: ${estado.colaPendiente} mensaje(s)`
 
   return (

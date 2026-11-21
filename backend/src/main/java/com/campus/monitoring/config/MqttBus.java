@@ -527,6 +527,54 @@ public class MqttBus implements InitializingBean, DisposableBean {
                 .toList();
     }
 
+    /** URL del broker configurada (gestion de comunicacion MQTT) */
+    public String url() {
+        return url;
+    }
+
+    /** El cliente emisor es el que publica telemetria y ordenes */
+    public boolean emisorConectado() {
+        MqttClient emisor = clientes.get("campus-emisor");
+        return emisor != null && emisor.isConnected();
+    }
+
+    /** Estado de cada cliente MQTT (emisor y suscriptores) */
+    public List<java.util.Map<String, Object>> estadoClientes() {
+        List<java.util.Map<String, Object>> salida = new java.util.ArrayList<>();
+        clientes.forEach((id, cliente) -> {
+            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("id", id);
+            m.put("conectado", cliente.isConnected());
+            m.put("rol", "campus-emisor".equals(id) ? "publicador" : "suscriptor");
+            salida.add(m);
+        });
+        return salida;
+    }
+
+    /** Suscripciones activas: que cliente escucha que topic y su cola durable */
+    public List<java.util.Map<String, Object>> estadoSuscripciones() {
+        List<java.util.Map<String, Object>> salida = new java.util.ArrayList<>();
+        for (Suscripcion sub : suscripciones.values()) {
+            java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+            m.put("clienteId", sub.clienteId());
+            m.put("topic", sub.topic());
+            m.put("cola", claveEntrada(sub.clienteId(), sub.topic()));
+            MqttClient cliente = clientes.get(sub.clienteId());
+            m.put("conectado", cliente != null && cliente.isConnected());
+            salida.add(m);
+        }
+        return salida;
+    }
+
+    /** Mensajes esperando PUBACK en la cola de salida (outbox) */
+    public long pendientesSalida() {
+        try {
+            return cola.pendientes(ColaService.SALIDA);
+        } catch (Exception e) {
+            return -1; // base de datos no disponible
+        }
+    }
+
     /** Suscripcion registrada en el bus (clienteId, filtro topic, manejador) */
     private record Suscripcion(String clienteId, String topic, BiConsumer<String, String> manejador) {
     }

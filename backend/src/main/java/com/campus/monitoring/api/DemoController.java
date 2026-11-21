@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -14,6 +15,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -21,24 +23,32 @@ import com.campus.monitoring.cola.ColaMensajes;
 import com.campus.monitoring.cola.ColaMensajesRepository;
 import com.campus.monitoring.config.MqttBus;
 import com.campus.monitoring.persistencia.PersistenciaService;
+import com.campus.monitoring.persistencia.Sensor;
+import com.campus.monitoring.persistencia.SensorRepository;
 import com.campus.monitoring.procesamiento.ProcesamientoService;
 import com.campus.monitoring.recepcion.RecepcionService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * Ruleta de fallas del panel de control.
+ * Ruleta de fallas del panel de control (T4 — simulacion de fallas).
  *
- * POST /api/demo/panic     -> elige AL AZAR un servicio del flujo
- *                             (recepcion, procesamiento, persistencia/BD,
- *                             broker MQTT) y lo deja fuera de servicio. Los
- *                             sensores NO entran en el sorteo: se apagan uno
- *                             a uno desde /api/sensores/{id}/apagar.
- * POST /api/demo/restaurar -> reactiva todo lo caido y drena las colas.
- * GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
- *                             se acumulo (para el banner del tablero).
+ * POST /api/demo/panic     -> elige AL AZAR un sensor encendido o cualquier
+ *                             servicio del flujo (recepcion, procesamiento,
+ *                             persistencia/BD, broker MQTT) y lo deja fuera de
+ *                             servicio. Admite ?tipo=SENSOR|RECEPCION|
+ *                             PROCESAMIENTO|PERSISTENCIA|MQTT para forzar la
+ *                             victima durante una demostracion.
+ * POST /api/demo/restaurar -> reactiva la victima y drena las colas.
+ * GET  /api/demo/estado    -> que esta caido, desde cuando, cuanta cola se
+ *                             acumulo y el detalle del sensor si aplica.
  *
- * Cada caida se simula con un flag en el propio servicio: mientras este
- * activo, el servicio lanza ComponenteCaidoException (o el bus no confirma
+ * El sensor se deja de publicar por MQTT (control/simulador/orden, accion
+ * "fallar"): la API no toca directamente al simulador. A diferencia del
+ * apagado manual (T6, accion "apagar"), el sensor sigue "encendido" para que
+ * el heartbeat lo detecte y publique SENSOR_INACTIVO (E1/HDU-04).
+ *
+ * Cada caida de servicio se simula con un flag en el propio servicio: mientras
+ * este activo, el servicio lanza ComponenteCaidoException (o el bus no confirma
  * publicaciones) y los mensajes quedan PENDIENTES en cola sin perderse.
  * Una sola falla activa a la vez.
  */
@@ -51,50 +61,64 @@ public class DemoController {
     /** Sin falla activa */
     private static final String NINGUNA = null;
 
+    private static final List<String> SERVICIOS = List.of(
+            "SENSOR", "RECEPCION", "PROCESAMIENTO", "PERSISTENCIA", "MQTT");
+
     private final RecepcionService recepcion;
     private final ProcesamientoService procesamiento;
     private final PersistenciaService persistencia;
+    private final SensorRepository sensores;
     private final ColaMensajesRepository colas;
     private final MqttBus mqtt;
     private final ObjectMapper json = new ObjectMapper();
 
     /**
      * Tipo de la falla activa:
-     * "RECEPCION" | "PROCESAMIENTO" | "PERSISTENCIA" | "MQTT"
+     * "SENSOR" | "RECEPCION" | "PROCESAMIENTO" | "PERSISTENCIA" | "MQTT"
      */
     private volatile String tipoCaido = NINGUNA;
-    /** Nombre del servicio caido */
+    /** Nombre del servicio caido (o id del sensor) */
     private volatile String victima = NINGUNA;
     private volatile Instant desde = null;
 
     public DemoController(RecepcionService recepcion,
                           ProcesamientoService procesamiento, PersistenciaService persistencia,
+                          SensorRepository sensores,
                           ColaMensajesRepository colas, MqttBus mqtt) {
         this.recepcion = recepcion;
         this.procesamiento = procesamiento;
         this.persistencia = persistencia;
+        this.sensores = sensores;
         this.colas = colas;
         this.mqtt = mqtt;
     }
 
     /**
-     * La ruleta: sortea AL AZAR entre los servicios del flujo de datos.
+     * La ruleta: sortea AL AZAR entre un sensor encendido y los servicios del
+     * flujo de datos. Con ?tipo=... se puede forzar la victima.
      * Si ya hay una falla activa, 409.
      */
     @PostMapping("/panic")
-    public Map<String, Object> panic() {
+    public Map<String, Object> panic(@RequestParam(required = false) String tipo) {
         if (tipoCaido != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Ya hay una falla activa (" + tipoCaido + ": " + victima
                             + "). Restaura antes de girar la ruleta otra vez.");
         }
 
-        // La ruleta: un slot por servicio del flujo
-        List<String> servicios = List.of("RECEPCION", "PROCESAMIENTO", "PERSISTENCIA", "MQTT");
-        String servicio = servicios.get(ThreadLocalRandom.current().nextInt(servicios.size()));
+        String servicio = elegirVictima(tipo);
 
         Map<String, Object> r = new LinkedHashMap<>();
         switch (servicio) {
+            case "SENSOR" -> {
+                Sensor sensor = elegirSensorEncendido();
+                publicarOrden("fallar", sensor.getId());
+                victima = sensor.getId();
+                r.put("detalle", "Orden MQTT enviada al simulador: el sensor deja de publicar "
+                        + "y el heartbeat lo marcara INACTIVO tras el umbral");
+                r.put("ubicacion", ubicacion(sensor));
+                r.put("estadoSensor", "FALLANDO");
+            }
             case "RECEPCION" -> {
                 recepcion.caer();
                 victima = "Recepcion";
@@ -126,13 +150,44 @@ public class DemoController {
         return r;
     }
 
-    /** Reactiva todo lo caido y drena las colas pendientes al instante */
+    /** Valida el tipo forzado o sortea uno al azar entre todos los slots */
+    private String elegirVictima(String tipoForzado) {
+        if (tipoForzado == null || tipoForzado.isBlank()) {
+            return SERVICIOS.get(ThreadLocalRandom.current().nextInt(SERVICIOS.size()));
+        }
+        String normalizado = tipoForzado.trim().toUpperCase(Locale.ROOT);
+        if (!SERVICIOS.contains(normalizado)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Tipo de falla invalido: " + tipoForzado + ". Use uno de: " + SERVICIOS);
+        }
+        return normalizado;
+    }
+
+    /** Un sensor encendido al azar (si todos estan apagados no hay nada que tumbar) */
+    private Sensor elegirSensorEncendido() {
+        List<Sensor> encendidos = sensores.findAll().stream()
+                .filter(Sensor::estaEncendido)
+                .toList();
+        if (encendidos.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "No hay sensores encendidos: encienda uno antes de girar la ruleta");
+        }
+        return encendidos.get(ThreadLocalRandom.current().nextInt(encendidos.size()));
+    }
+
+    /**
+     * Reactiva la victima y drena las colas pendientes al instante.
+     * Si la victima era un sensor, solo se enciende ESE sensor: los que el
+     * administrador apago a mano se respetan.
+     */
     @PostMapping("/restaurar")
     public Map<String, Object> restaurar() {
         String tipoAnterior = tipoCaido;
         String victimaAnterior = victima;
 
-        publicarOrden("restaurar", null);   // sensores (Pub/Sus con el simulador)
+        if ("SENSOR".equals(tipoAnterior) && victimaAnterior != null) {
+            publicarOrden("restaurar", victimaAnterior);
+        }
         recepcion.levantar();
         procesamiento.levantar();
         persistencia.levantar();
@@ -167,7 +222,24 @@ public class DemoController {
         r.put("colaPendiente", totalCola(ColaMensajes.PENDIENTE));
         r.put("colaFallidos", totalCola(ColaMensajes.FALLIDO));
         r.put("porCola", resumenColas());
+        if ("SENSOR".equals(tipoCaido) && victima != null) {
+            sensores.findById(victima).ifPresent(s -> {
+                r.put("sensorId", s.getId());
+                r.put("ubicacion", ubicacion(s));
+                r.put("fallaSimulada", true);
+                r.put("encendido", s.estaEncendido());
+                r.put("estadoSensor", s.getEstado());
+                r.put("ultimaMedicionEn", s.getUltimaMedicionEn());
+                r.put("segundosSinDatos", s.getUltimaMedicionEn() == null ? null
+                        : Duration.between(s.getUltimaMedicionEn(), Instant.now()).getSeconds());
+            });
+        }
         return r;
+    }
+
+    private static String ubicacion(Sensor s) {
+        return s.getSede() + (s.getSalon() == null || s.getSalon().isBlank()
+                ? "" : " · " + s.getSalon());
     }
 
     /** Total de mensajes en un estado dado (todas las colas juntas) */

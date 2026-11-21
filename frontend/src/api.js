@@ -148,6 +148,25 @@ export function fetchEstado() {
 }
 
 /**
+ * Heartbeat (T3 — HDU-04): umbral configurado, ultima comprobacion y estado
+ * de cada sensor (ACTIVO / INACTIVO / APAGADO).
+ */
+export function fetchMonitoreo() {
+  return get('/api/monitoreo')
+}
+
+/** Historial de alertas del heartbeat (SENSOR_INACTIVO / SENSOR_RECUPERADO) */
+export function fetchAlertasHeartbeat(limite = 20) {
+  const q = new URLSearchParams({ tipo: 'SENSOR_INACTIVO', limite: String(limite) })
+  return get(`/api/monitoreo/alertas?${q}`)
+}
+
+/** Gestion de la comunicacion MQTT: broker, clientes, topics y colas */
+export function fetchMqttEstado() {
+  return get('/api/mqtt/estado')
+}
+
+/**
  * Registro de errores con filtros combinables (Tarea 9 — HDU-07).
  * `filtros` admite { tipo, sensorId, sensor, fecha, desde, hasta } y lo que
  * venga vacio no se manda: el backend lo resuelve en la base de datos.
@@ -162,15 +181,16 @@ export function fetchErrores(filtros = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Control de fallas — la ruleta del panel
-//   POST /api/demo/panic     -> apaga al azar un sensor o cualquier servicio
-//                               (recepcion, procesamiento, persistencia, MQTT)
-//   POST /api/demo/restaurar -> reactiva todo lo caido y drena las colas
-//   GET  /api/demo/estado    -> que esta caido, desde cuando y cuanta cola
+// Control de fallas — la ruleta del panel (T4)
+//   POST /api/demo/panic?tipo=... -> apaga al azar un sensor o un servicio
+//                                    (o fuerza la victima si se indica tipo)
+//   POST /api/demo/restaurar      -> reactiva la victima y drena las colas
+//   GET  /api/demo/estado         -> que esta caido, desde cuando y cuanta cola
 // ---------------------------------------------------------------------------
 
-export function panic() {
-  return post('/api/demo/panic')
+export function panic(tipo) {
+  const q = tipo ? `?tipo=${encodeURIComponent(tipo)}` : ''
+  return post(`/api/demo/panic${q}`)
 }
 
 export function restaurar() {

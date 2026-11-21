@@ -37,4 +37,7 @@ public interface ErrorRegistroRepository extends JpaRepository<ErrorRegistro, Lo
                                          @Param("sensorId") String sensorId,
                                          @Param("desde") Instant desde,
                                          @Param("hasta") Instant hasta);
+
+    /** Ultimas alertas de un tipo (heartbeat: SENSOR_INACTIVO / SENSOR_RECUPERADO) */
+    List<ErrorRegistro> findTop200ByTipoIgnoreCaseOrderByFechaDesc(String tipo);
 }

@@ -4,7 +4,6 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.slf4j.Logger;
@@ -31,8 +30,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  * - El catalogo se lee de la BD en cada ciclo: agregar/modificar/eliminar un
  *   sensor desde la API o la UI se refleja sin tocar codigo ni reiniciar
  *   (modificabilidad: el simulador ES el unico punto que conoce el catalogo).
- * - Escucha control/simulador/# para las ordenes de falla del panel
- *   (apagar / restaurar sensor — la "ruleta" del botón de panico).
+ * - Escucha control/simulador/# para las ordenes de apagar/encender (T6) y
+ *   las de la "ruleta" de fallas (T4). El estado viaja por MQTT y se persiste
+ *   en la columna `encendido`, asi sobrevive a reinicios del backend.
  */
 @Component
 public class SensorSimulator {
@@ -43,8 +43,16 @@ public class SensorSimulator {
     private final SensorRepository sensores;
     private final ObjectMapper json = new ObjectMapper();
 
-    /** Sensores apagados por orden del panel (ruleta / toggle individual) */
-    private final Map<String, Boolean> apagados = new ConcurrentHashMap<>();
+    /**
+     * Sensores con una FALLA SIMULADA activa (ruleta T4). No se publican,
+     * pero siguen "encendidos": el heartbeat los detecta y genera la alerta
+     * SENSOR_INACTIVO. Es distinto de apagar por el administrador (T6), que
+     * sí cambia `encendido=false` y no alerta.
+     *
+     * Vive solo en memoria a proposito: al reiniciar el backend la demo de
+     * fallas se considera terminada y todos los sensores vuelven a publicar.
+     */
+    private final java.util.Set<String> fallados = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     @Value("${sensor.frecuencia-ms:5000}")
     private long frecuenciaMs;
@@ -108,21 +116,39 @@ public class SensorSimulator {
         } else {
             // Backfill: filas antiguas (antes del CRUD) sin valorBase
             for (Sensor s : sensores.findAll()) {
+                boolean cambio = false;
                 if (s.getValorBase() == null) {
                     s.setValorBase(valorBasePorDefecto(s.getVariable()));
+                    cambio = true;
+                }
+                if (s.getEncendido() == null) {
+                    s.setEncendido(true);
+                    cambio = true;
+                }
+                if (s.getRegistradoEn() == null) {
+                    s.setRegistradoEn(Instant.now());
+                    cambio = true;
+                }
+                if (s.getEstadoCambiadoEn() == null) {
+                    s.setEstadoCambiadoEn(s.getRegistradoEn());
+                    cambio = true;
+                }
+                if (cambio) {
                     sensores.save(s);
                 }
             }
         }
         // Orden de falla del panel (Pub/Sus puro: la API publica y aqui se actua)
         mqtt.suscribir("campus-simulador", "control/simulador/#", this::interpretarOrden);
-        log.info("[SIMULADOR] Catalogo listo: {} nuevos, {} en total (Tabla 1)",
-                creados, sensores.count());
+        long apagados = sensores.findByEncendidoFalse().size();
+        log.info("[SIMULADOR] Catalogo listo: {} nuevos, {} en total, {} apagado(s) (Tabla 1)",
+                creados, sensores.count(), apagados);
     }
 
     /**
-     * Orden de falla recibida via control/simulador/#:
-     *   {"accion":"apagar","sensorId":"TMP-SUR-01"}
+     * Orden recibida via control/simulador/#:
+     *   {"accion":"apagar","sensorId":"TMP-SUR-01"}   -> T6: apagado manual
+     *   {"accion":"fallar","sensorId":"TMP-SUR-01"}   -> T4: falla simulada
      *   {"accion":"restaurar"}                    -> restaura todas
      *   {"accion":"restaurar","sensorId":"..."}   -> restaura una
      */
@@ -139,9 +165,18 @@ public class SensorSimulator {
                         apagar(sensorId);
                     }
                 }
+                case "fallar" -> {
+                    if (sensorId.isBlank()) {
+                        log.warn("[CONTROL] Orden fallar sin sensorId: {}", mensaje);
+                    } else {
+                        fallar(sensorId);
+                    }
+                }
                 case "restaurar" -> {
                     if (sensorId.isBlank()) {
-                        List<String> todos = List.copyOf(apagados.keySet());
+                        List<String> todos = sensores.findByEncendidoFalse().stream()
+                                .map(Sensor::getId)
+                                .toList();
                         todos.forEach(this::restaurar);
                         log.info("[CONTROL] Orden restaurar: {} sensor(es) reactivado(s)", todos.size());
                     } else {
@@ -160,10 +195,17 @@ public class SensorSimulator {
     public void publicarMediciones() {
         Instant ahora = Instant.now();
         for (Sensor s : sensores.findAll()) {
-            if (Boolean.TRUE.equals(apagados.get(s.getId()))) {
-                // Apagado por orden del panel: no publica, pero el resto del
-                // sistema sigue vivo. El panel muestra "reintentando".
-                log.info("[SIMULADOR] {} apagado: reintentando publicar (sin datos)", s.getId());
+            if (!s.estaEncendido()) {
+                // Apagado por el administrador (T6): no publica, pero el resto
+                // del sistema sigue vivo. El heartbeat lo marca APAGADO y no
+                // genera alertas de inactividad.
+                log.debug("[SIMULADOR] {} apagado: no publica (T6)", s.getId());
+                continue;
+            }
+            if (fallados.contains(s.getId())) {
+                // Falla simulada (T4): el sensor sigue encendido pero deja de
+                // transmitir. El heartbeat lo marcara INACTIVO y alertara.
+                log.debug("[SIMULADOR] {} con falla simulada: no publica (T4)", s.getId());
                 continue;
             }
             double valor = medir(s);
@@ -211,30 +253,62 @@ public class SensorSimulator {
         return Math.round(v * p) / p;
     }
 
-    /** Apaga un sensor (usado por el panel de control / la ruleta) */
+    /** Apaga un sensor (T6: toggle del panel / orden de la ruleta T4) */
     public void apagar(String sensorId) {
-        if (!sensores.existsById(sensorId)) {
-            log.warn("[SIMULADOR] Orden de apagar para sensor inexistente: {}", sensorId);
+        sensores.findById(sensorId).ifPresentOrElse(s -> {
+            s.setEncendido(false);
+            s.setEstado("APAGADO");
+            s.setEstadoCambiadoEn(Instant.now());
+            sensores.save(s);
+            log.warn("[SIMULADOR] Sensor {} APAGADO por orden del panel (T6)", sensorId);
+        }, () -> log.warn("[SIMULADOR] Orden de apagar para sensor inexistente: {}", sensorId));
+    }
+
+    /**
+     * Falla simulada de un sensor (ruleta T4). Deja de publicar SIN apagarlo:
+     * asi el heartbeat lo ve inactivo a los `heartbeat.segundos` y publica
+     * SENSOR_INACTIVO, que es justo lo que se quiere demostrar (E1/HDU-04).
+     */
+    public void fallar(String sensorId) {
+        if (sensores.findById(sensorId).isEmpty()) {
+            log.warn("[SIMULADOR] Orden de falla para sensor inexistente: {}", sensorId);
             return;
         }
-        apagados.put(sensorId, true);
-        log.warn("[SIMULADOR] Sensor {} APAGADO por orden del panel", sensorId);
+        fallados.add(sensorId);
+        log.warn("[SIMULADOR] Sensor {} con FALLA SIMULADA (T4): deja de publicar, "
+                + "el heartbeat lo marcara INACTIVO", sensorId);
     }
 
-    /** Reactiva un sensor apagado */
+    /** Reactiva un sensor apagado o con falla simulada. La gracia del heartbeat se reinicia. */
     public void restaurar(String sensorId) {
-        if (apagados.remove(sensorId) != null) {
-            log.info("[SIMULADOR] Sensor {} restaurado", sensorId);
-        }
+        fallados.remove(sensorId);
+        sensores.findById(sensorId).ifPresentOrElse(s -> {
+            s.setEncendido(true);
+            s.setEstado("ACTIVO");
+            s.setEstadoCambiadoEn(Instant.now());
+            sensores.save(s);
+            log.info("[SIMULADOR] Sensor {} ENCENDIDO por orden del panel (T6/T4)", sensorId);
+        }, () -> log.warn("[SIMULADOR] Orden de encender para sensor inexistente: {}", sensorId));
     }
 
-    /** Limpia el mapa al eliminar un sensor con el CRUD */
+    /** Al eliminar un sensor no queda estado residual */
     public void olvidar(String sensorId) {
-        apagados.remove(sensorId);
+        fallados.remove(sensorId);
+        log.debug("[SIMULADOR] Sensor {} eliminado del catalogo", sensorId);
     }
 
+    /** True si el sensor tiene una falla simulada activa (ruleta T4) */
+    public boolean estaFallando(String sensorId) {
+        return fallados.contains(sensorId);
+    }
+
+    /** Sensores apagados (lo usa el tablero para pintar el estado) */
     public Map<String, Boolean> estadoApagados() {
-        return new LinkedHashMap<>(apagados);
+        Map<String, Boolean> salida = new LinkedHashMap<>();
+        for (Sensor s : sensores.findByEncendidoFalse()) {
+            salida.put(s.getId(), true);
+        }
+        return salida;
     }
 
     private record SensorDef(String id, String variable, String sede, String salon, double base) {

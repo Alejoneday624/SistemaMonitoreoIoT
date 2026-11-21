@@ -597,6 +597,117 @@
   border-color: var(--accent-border);
 }
 
+/* ---------------- Heartbeat (T3) ---------------- */
+.monitoreo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-left: 3px solid #12b886;
+}
+.monitoreo-panel.monitoreo-alerta {
+  border-left-color: #fa5252;
+  background: rgba(250, 82, 82, 0.06);
+}
+.monitoreo-cabecera {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-h);
+  font-size: 15px;
+}
+.monitoreo-datos {
+  display: flex;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text);
+}
+.monitoreo-datos strong {
+  color: var(--text-h);
+}
+
+.badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--text-h);
+}
+.badge-ok {
+  border-color: rgba(18, 184, 134, 0.5);
+  background: rgba(18, 184, 134, 0.14);
+  color: #0ca678;
+}
+.badge-off {
+  border-color: rgba(250, 82, 82, 0.5);
+  background: rgba(250, 82, 82, 0.14);
+  color: #fa5252;
+}
+
+/* ---------------- Selector de victima de la ruleta (T4) ---------------- */
+.select-falla {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text);
+}
+.select-falla select {
+  font: inherit;
+  font-size: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+}
+.select-falla select:focus {
+  outline: none;
+  border-color: var(--accent-border);
+}
+
+/* ---------------- Comunicacion MQTT ---------------- */
+.mqtt-resumen {
+  display: flex;
+  gap: 8px 20px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+.mqtt-resumen code {
+  font-size: 12px;
+}
+.mqtt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 18px;
+}
+.mqtt-grid h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--text-h);
+  font-weight: 600;
+}
+.tabla-compacta th,
+.tabla-compacta td {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.tabla-compacta code {
+  font-size: 11px;
+  word-break: break-all;
+}
+
 /* ---------------- Responsivo ---------------- */
 @media (max-width: 820px) {
   .app {

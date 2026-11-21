@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -38,6 +39,10 @@ public class PanelApiController {
 
     /** Sensores sin datos recientes se marcan desactualizados (HDU-01) */
     private static final Duration VIGENCIA = Duration.ofSeconds(90);
+
+    /** Umbral del heartbeat (T3/HDU-04); se inyecta para no duplicar el valor */
+    @Value("${heartbeat.segundos:120}")
+    private long heartbeatSegundos = 120;
 
     /**
      * Limites neutros que no excluyen ningun registro. Sustituyen a los nulos
@@ -74,11 +79,14 @@ public class PanelApiController {
             m.put("salon", s.getSalon());
             m.put("valorBase", s.getValorBase());
             m.put("estado", s.getEstado());
-            m.put("apagado", apagados.contains(s.getId()));
+            boolean apagado = Boolean.FALSE.equals(s.getEncendido()) || apagados.contains(s.getId());
+            m.put("apagado", apagado);
+            m.put("encendido", !apagado);
             m.put("ultimaMedicionEn", s.getUltimaMedicionEn());
             boolean desactualizado = s.getUltimaMedicionEn() == null
                     || Duration.between(s.getUltimaMedicionEn(), ahora).compareTo(VIGENCIA) > 0;
             m.put("desactualizado", desactualizado);
+            m.put("inactivoHeartbeat", "INACTIVO".equals(s.getEstado()));
             m.put("antiguedadSegundos", s.getUltimaMedicionEn() == null ? null
                     : Duration.between(s.getUltimaMedicionEn(), ahora).getSeconds());
             salida.add(m);
@@ -189,14 +197,19 @@ public class PanelApiController {
     public Map<String, Object> estado() {
         List<Sensor> todos = sensores.findAll();
         Instant ahora = Instant.now();
+        Duration umbral = Duration.ofSeconds(heartbeatSegundos);
         long activos = todos.stream()
+                .filter(Sensor::estaEncendido)
                 .filter(s -> s.getUltimaMedicionEn() != null
-                        && Duration.between(s.getUltimaMedicionEn(), ahora).compareTo(VIGENCIA) <= 0)
+                        && Duration.between(s.getUltimaMedicionEn(), ahora).compareTo(umbral) <= 0)
                 .count();
+        long apagados = todos.stream().filter(s -> !s.estaEncendido()).count();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("sensoresTotales", todos.size());
         m.put("sensoresActivos", activos);
-        m.put("sensoresInactivos", todos.size() - activos);
+        m.put("sensoresInactivos", todos.size() - activos - apagados);
+        m.put("sensoresApagados", apagados);
+        m.put("heartbeatSegundos", heartbeatSegundos);
         m.put("medicionesTotales", mediciones.count());
         m.put("erroresRegistrados", errores.count());
         m.put("medicionesUltimaHora", mediciones.countByFechaAfter(ahora.minus(Duration.ofHours(1))));
