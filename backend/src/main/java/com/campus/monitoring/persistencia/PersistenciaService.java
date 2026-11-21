@@ -54,8 +54,10 @@ public class PersistenciaService {
     @EventListener(ApplicationReadyEvent.class)
     public void suscribir() {
         mqtt.suscribir("campus-persistencia", "interno/procesadas", this::guardarMedicion);
-        // Los errores de recepcion/procesamiento tambien se archivan (HDU-07)
-        mqtt.suscribir("campus-persistencia-log", "interno/logs", this::guardarError);
+        // Los errores de recepcion/procesamiento se archivan (HDU-07)
+        mqtt.suscribir("campus-persistencia-log", "interno/logs", this::guardarEvento);
+        // Las alertas del heartbeat (T3/HDU-04) tambien quedan en el registro
+        mqtt.suscribir("campus-persistencia-alertas", "interno/alertas", this::guardarEvento);
     }
 
     private void guardarMedicion(String topic, String mensaje) {
@@ -113,20 +115,28 @@ public class PersistenciaService {
         });
     }
 
-    private void guardarError(String topic, String mensaje) {
+    /**
+     * Guarda un evento de interno/logs o interno/alertas en la tabla de
+     * errores (HDU-07). El heartbeat publica SENSOR_INACTIVO /
+     * SENSOR_RECUPERADO por interno/alertas y quedan auditables aqui.
+     */
+    private void guardarEvento(String topic, String mensaje) {
         try {
             JsonNode n = json.readTree(mensaje);
             ErrorRegistro e = new ErrorRegistro(
                     n.path("tipo").asText("DESCONOCIDO"),
-                    n.path("sensorId").asText(null),
+                    n.path("sensorId").isMissingNode() || n.path("sensorId").isNull()
+                            ? null
+                            : n.path("sensorId").asText(null),
                     n.path("fecha").isMissingNode()
                             ? Instant.now()
                             : Instant.parse(n.get("fecha").asText()),
                     n.path("descripcion").asText(""));
             errores.save(e);
-            log.warn("[PERSISTENCIA] Error registrado: {} - {}", e.getTipo(), e.getDescripcion());
+            log.warn("[PERSISTENCIA] Evento registrado ({}): {} - {}",
+                    topic, e.getTipo(), e.getDescripcion());
         } catch (Exception ex) {
-            log.error("[PERSISTENCIA] Error guardando registro de errores: {}", ex.getMessage());
+            log.error("[PERSISTENCIA] Error guardando evento de {}: {}", topic, ex.getMessage());
         }
     }
 

@@ -55,6 +55,10 @@ services:
       # Frecuencia del simulador: por defecto5 s; se puede frenar sin rebuild
       # con SENSOR_FRECUENCIA_MS en el .env y `docker compose up -d`
       SENSOR_FRECUENCIA_MS: ${SENSOR_FRECUENCIA_MS:-5000}
+      # Heartbeat (T3/HDU-04): umbral, tick de revision y gracia de arranque
+      HEARTBEAT_SEGUNDOS: ${HEARTBEAT_SEGUNDOS:-120}
+      HEARTBEAT_COMPROBACION_MS: ${HEARTBEAT_COMPROBACION_MS:-10000}
+      HEARTBEAT_ARRANQUE_MS: ${HEARTBEAT_ARRANQUE_MS:-30000}
     ports:
       - "8081:8080"
     depends_on:

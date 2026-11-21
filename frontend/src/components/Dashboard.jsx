@@ -10,7 +10,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
-import { fetchDemoEstado, fetchEstado, fetchMediciones } from '../api.js'
+import { fetchDemoEstado, fetchEstado, fetchMediciones, fetchMonitoreo } from '../api.js'
 
 /** El tablero se actualiza solo, sin recargar la pagina */
 const INTERVALO_MS = 5000
@@ -185,6 +185,7 @@ function Dashboard() {
   const [temp, setTemp] = useState([])
   const [aire, setAire] = useState([])
   const [estado, setEstado] = useState(null)
+  const [monitoreo, setMonitoreo] = useState(null)
   const [falla, setFalla] = useState(null)
   const [error, setError] = useState(null)
 
@@ -192,17 +193,19 @@ function Dashboard() {
     let vivo = true
     const cargar = async () => {
       try {
-        const [t, a, e, f] = await Promise.all([
+        const [t, a, e, f, m] = await Promise.all([
           fetchMediciones('temperatura', 160),
           fetchMediciones('calidad-aire', 80),
           fetchEstado(),
           fetchDemoEstado(),
+          fetchMonitoreo().catch(() => null),
         ])
         if (!vivo) return
         setTemp(t)
         setAire(a)
         setEstado(e)
         setFalla(f)
+        setMonitoreo(m)
         setError(null)
       } catch (err) {
         if (vivo) setError(err.message)
@@ -224,6 +227,11 @@ function Dashboard() {
   const ultAireFed = ultima(aire, 'Federman')
   const ppmUmbral = 900
 
+  // T3/HDU-04: sensores encendidos que dejaron de latir (uno solo por sensor,
+  // aunque el heartbeat ya haya publicado la alerta)
+  const inactivosHeartbeat =
+    monitoreo?.sensores?.filter((s) => s.estado === 'INACTIVO') ?? []
+
   return (
     <>
       <header className="cabecera">
@@ -239,6 +247,15 @@ function Dashboard() {
           </div>
         )}
       </header>
+
+      {inactivosHeartbeat.length > 0 && (
+        <div className="aviso aviso-error">
+          <strong>Heartbeat:</strong> {inactivosHeartbeat.length} sensor(es) sin
+          latido durante {monitoreo?.heartbeatSegundos ?? 120} s —{' '}
+          {inactivosHeartbeat.map((s) => `${s.id} (${s.ubicacion})`).join(', ')}.
+          La alerta ya fue publicada en <code>interno/alertas</code>.
+        </div>
+      )}
 
       {error && (
         <div className="aviso aviso-error">

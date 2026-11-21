@@ -61,12 +61,119 @@ docker exec campusiot-backend sh -c "tail -f /tmp/access_log.*.log"
 | `campus/{sede}/{variable}/{sensorId}` | Simulador | Recepción (`campus/#`) |
 | `interno/validadas` | Recepción | Procesamiento |
 | `interno/procesadas` | Procesamiento | Persistencia, (Ronda 2: monitoreo, alertas) |
+| `interno/alertas` | Monitoreo (heartbeat) | Persistencia (registro de alertas) |
 | `interno/logs` | Recepción, Procesamiento, Persistencia | Persistencia (registro de errores) |
-| `control/simulador/#` | API REST (botones del panel) | Simulador (órdenes de falla) |
+| `control/simulador/#` | API REST (toggle T6 y ruleta T4) | Simulador (órdenes apagar/encender) |
 
 QoS 1 en todas las publicaciones + sesiones `cleanSession=false`: si un
 suscriptor se cae, el broker **encola los mensajes** y los entrega al
 reconectar (tácticas E9/E11).
+
+## Heartbeat de sensores (T3 · HDU-04)
+
+No hay un *ping* aparte: **la propia medición es el latido**. Cuando
+Persistencia guarda una medición actualiza `ultimaMedicionEn` y marca el
+sensor `ACTIVO` (también si la medición era un duplicado rechazado por la
+restricción única). El `MonitoreoService` revisa el catálogo cada 10 s
+(`HEARTBEAT_COMPROBACION_MS`) y:
+
+- Si un sensor **encendido** lleva más de **120 s** (`HEARTBEAT_SEGUNDOS`)
+  sin una medición nueva, lo marca `INACTIVO` y publica una sola alerta
+  `SENSOR_INACTIVO` en `interno/alertas` con sensor, ubicación, fecha/hora y
+  segundos sin datos.
+- Si vuelve a transmitir, lo marca `ACTIVO` y publica `SENSOR_RECUPERADO`.
+- Si el administrador lo apagó (T6), lo marca `APAGADO` y **no alerta**.
+
+Las alertas se archivan en la tabla de errores (Persistencia se suscribe a
+`interno/alertas`) y el tablero las muestra en el dashboard y en la tabla de
+sensores. La comparación es **solo hacia adelante** (una reentrega QoS 1
+antigua no retrocede el latido) y al arrancar hay una gracia de 30 s para no
+alertar por datos históricos mientras el simulador retoma el flujo.
+
+```bash
+curl http://localhost:8081/api/monitoreo            # umbral, tick y estado por sensor
+curl http://localhost:8081/api/monitoreo/alertas    # historial SENSOR_INACTIVO
+```
+
+Para verlo rápido en la demo se puede bajar el umbral sin rebuild:
+
+```bash
+echo 'HEARTBEAT_SEGUNDOS=20' >> .env
+sudo docker compose up -d backend   # recrea solo el backend
+```
+
+## Gestión de la comunicación MQTT
+
+El panel **Control de fallas → Comunicación MQTT** y el endpoint
+`GET /api/mqtt/estado` muestran en vivo:
+
+- broker configurado, estado del cliente emisor y si la ruleta lo tiene caído;
+- clientes MQTT (publicador y suscriptores) con su estado de conexión;
+- suscripciones activas y la cola durable (inbox) de cada una;
+- mensajes esperando PUBACK en la cola de salida (outbox);
+- mapa de topics: quién publica, quién escucha y para qué.
+
+```bash
+curl http://localhost:8081/api/mqtt/estado
+```
+
+## Demostración guiada (T3 · T4 · T6 · MQTT)
+
+Para no esperar los 120 s reales del heartbeat durante la demo, se puede
+bajar el umbral sin rebuild:
+
+```bash
+echo 'HEARTBEAT_SEGUNDOS=20' >> .env
+docker compose up -d backend        # recrea solo el backend
+```
+
+**1. Heartbeat de un sensor (T3 · HDU-04 · E1).** La ruleta elige un sensor
+encendido y le envía por MQTT la orden `fallar`: el simulador deja de
+publicarlo **pero el sensor sigue encendido**. A los `HEARTBEAT_SEGUNDOS`
+(120 s por defecto) el monitor lo marca `INACTIVO`, publica
+`SENSOR_INACTIVO` en `interno/alertas` y Persistencia lo archiva.
+
+```bash
+curl -X POST "http://localhost:8081/api/demo/panic?tipo=SENSOR"
+curl http://localhost:8081/api/monitoreo            # estado y segundos sin datos
+curl http://localhost:8081/api/monitoreo/alertas    # alerta archivada
+curl -X POST http://localhost:8081/api/demo/restaurar
+# al volver a publicar: ACTIVO + SENSOR_RECUPERADO en interno/alertas
+```
+
+En el tablero se ve el banner **“Sensor caído: … — sin datos hace X s”**, la
+tabla de sensores pasa a **Inactivo (heartbeat)** y el dashboard muestra el
+aviso con la ubicación.
+
+**2. Falla de un servicio (T4).** Fuerza la víctima para una demo
+reproducible (`RECEPCION`, `PROCESAMIENTO`, `PERSISTENCIA` o `MQTT`); los
+mensajes quedan `PENDIENTES` en la cola y se drenan al restaurar.
+
+```bash
+curl -X POST "http://localhost:8081/api/demo/panic?tipo=PROCESAMIENTO"
+curl http://localhost:8081/api/demo/estado
+curl -X POST http://localhost:8081/api/demo/restaurar
+```
+
+**3. Apagado manual de un sensor (T6 · HDU-05).** Es distinto de la falla:
+la orden `apagar` viaja por `control/simulador/orden`, el simulador marca
+`encendido=false` y el heartbeat lo deja en `APAGADO` **sin generar
+alertas**. El estado sobrevive a reinicios porque vive en PostgreSQL.
+
+```bash
+curl -X POST http://localhost:8081/api/sensores/TMP-SUR-01/apagar
+curl http://localhost:8081/api/sensores
+curl -X POST http://localhost:8081/api/sensores/TMP-SUR-01/encender
+```
+
+**4. Comunicación MQTT.** `GET /api/mqtt/estado` (y el panel del tablero)
+muestra broker, clientes, suscripciones, topics y el tamaño de la cola de
+salida. Si la ruleta tumba el broker, esa cola crece y se vacía al restaurar.
+
+```bash
+curl http://localhost:8081/api/mqtt/estado
+```
+
 
 ## Demo de fallas — la ruleta
 
@@ -74,7 +181,7 @@ En el tablero, sección **Control de fallas**, el botón *Girar ruleta* elige
 **al azar** la víctima entre un sensor del catálogo y **cualquier servicio**
 del flujo (recepción, procesamiento, persistencia/base de datos, broker MQTT):
 
-- **Sensor** → la orden viaja por MQTT (`control/simulador/#`, Pub/Sus puro)
+- **Sensor** → la orden `fallar` viaja por MQTT (`control/simulador/#`, Pub/Sus puro)
   y el simulador deja de publicarlo: sus tarjetas muestran "sin datos", a los
  90 s aparece "Desactualizado" y el banner global muestra
   **"Sensor caído: … — reintentando"**. El resto del sistema sigue moviéndose.
