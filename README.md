@@ -417,6 +417,89 @@ tocar y la señal de "listo".
 
 ---
 
+### Fase de Documentación y Validación Final
+
+**Entrega y sustentación: 28 de Noviembre**
+
+El proyecto final exige la sustentación de tu diseño.
+
+#### Documentación Estructural
+
+**Vistas Arquitectónicas** (modelo 4+1 o Views and Beyond):
+
+- **Vista Lógica**: Documenta las clases e interfaces principales y sus relaciones.  
+  El sistema cuenta con las siguientes capas y componentes principales:
+  - `SensorSimulator`: Genera datos de simulacro basados en el catálogo de la BD.
+  - `MqttBus`: Bus MQTT con colas de salida/entrada (patrón E9/E11).
+  - `RecepcionService`: Valida formatos de datos (HDU-02/03).
+  - `ProcesamientoService`: Procesamiento de mediciones, umbrales y detección de duplicados.
+  - `Persistencia`: Entidades JPA y acceso único a BD.
+  - `API REST`: Controladores para panel, demo, CRUD sensores y seguridad.
+  - `MonitoreoService`: Heartbeat y detección de inactivos.
+  - Seguridad RBAC: Roles (admin, comunidad, mantenimiento) y filtros.
+
+- **Vista de Procesos**: Concurrencia y sincronización.
+  - Uso de hilos y bloques sincronizados en `MqttBus` para garantizar entrega QoS 1.
+  - Colas duraderas (outbox/inbox) en PostgreSQL para supervivencia ante fallos.
+  - Mecanismo de reintentos máximo (5 intentos) antes de marcar mensaje como `FALLIDO`.
+  - Heartbeat cada 30 s, marcado de inactivo a los 120 s (`HEARTBEAT_SEGUNDOS`).
+  - Los mensajes PENDIENTE en cola son reprocesados al reconectar servicios.
+
+- **Vista de Despliegue**: Mapeo de software a hardware.
+  - **Docker local**: 4 contenedores (frontend, backend, mosquitto, db) orquestados por docker-compose.
+  - **AWS EC2 (t2.micro)**: Mismo docker-compose corriendo en una instancia gratuita.
+    - Frontend (nginx :80) → balanceo al backend.
+    - Backend (Spring Boot) → db:5432 y mosquitto:1883 (red interna).
+    - db (PostgreSQL) → volumen EBS para persistencia de colas.
+    - mosquitto → volumen EBS para sesiones persistentes.
+  - **Render + Vercel (alternativa gratis)**: Frontend en Vercel, backend en Render,
+    base de datos Render Postgres, broker EMQX Cloud Serverless.
+
+**Decisiones Clave**:
+
+1. **Arquitectura Pub/Sub con MQTT** sobre HTTP: Decidimos usar MQTT con QoS 1 y sesiones persistentes (`cleanSession=false`) para garantizar que ningún mensaje se pierda aunque un suscriptor se caiga (tácticas E9/E11). Esto permite que el broker encole mensajes y los entregue al reconectar, sobreviviendo a reinicios de componentes.
+
+2. **PostgreSQL como cola centralizada**: En lugar de depender solo de la memoria del broker o archivos locales, todas las colas de mensajes (salida/entrada) se persisten en la tabla `cola_mensajes` de PostgreSQL. Esto asegura que los datos sobrevivan a redeploys completos, caídas de contenedores y el modo "sleep" de Render (free tier), donde el disco efímero se perdería.
+
+3. **Patrón E9/E11 (Colas de respaldo)**: Diseñamos el sistema para que cada servicio escriba en la base de datos antes de confiar en la red. Si cae el broker, las publicaciones se acumulan en la cola `salida` (outbox) y se entregan en orden FIFO al reconectar. Si cae el backend, la cola vive en la BD y al volver se vacía automáticamente.
+
+4. **Spring Boot + Java 21**: Elección por madurez del ecosistema, soporte nativo de Testcontainers para pruebas de integración con bases y brokers reales en Docker, y capacidad de construir imágenes multi-stage (Maven → JRE 21) para reducir el tamaño final.
+
+5. **Frontend React con Vite**: Para tener un tablero altamente responsivo con actualizaciones en tiempo real, hot-reload durante desarrollo y un build optimizado para despliegue en Vercel/Render.
+
+6. **Patrones de resiliencia**: Timeouts, reintentos con backoff exponencial, colas con tope máximo (5000 mensajes) que descartan los más viejos cuando se llena (para telemetría, lo valioso es lo reciente), y marcadores de fallo (`FALLIDO`) que no bloquean los mensajes posteriores.
+
+#### Evaluación Técnica
+
+**Validación de Riesgos (versión simplificada de ATAM)**:
+
+El prototipo fue sometido a una evaluación de riesgos identificando los siguientes puntos de sensibilidad y trade-offs:
+
+| Riesgo | Descripción | Mitigación |
+|---|---|---|
+| **Pérdida de mensajes en caídas de red** | Si el broker MQTT cae, las publicaciones podrían perderse. | Colas de salida (outbox) en PostgreSQL: cada publicación se guarda en BD antes de confirmar. Al reconectar, el broker entrega los mensajes encolados. |
+| **Fallo de un componente crítico** (backend, db) | Detención del procesamiento de mediciones. | Persistencia en BD de colas `entrada:{cliente}/{topic}`. Al arrancar, el servicio reprocesa lo pendiente. Heartbeat + detección de inactividad (120 s) para alertar. |
+| **Cuello de botella en la cola** | Bajo carga intensa, la cola `cola_mensajes` podría saturarse. | Tope máximo de 5000 mensajes PENDIENTE; al alcanzar el límite, se descartan los más viejos. Parámetros configurables: `COLA_REINTENTOS_MAX` (5) y `COLA_FALLIDOS_DIAS` (7). |
+| **Datos obsoletos** | Los sensores pueden tener frecuencias variables. | Cada sensor puede editar su frecuencia (`SENSOR_FRECUENCIA_MS`) de forma dinámica sin necesidad de tocar código ni reiniciar. El simulador lee el catálogo de la BD cada 5 s. |
+| **Formato de datos inconsistentes** | Los sensores pueden enviar distintos formatos de payload. | Validador en `RecepcionService` que verifica formatos HDU-02/03 antes de procesar. Mensajes con formato inválido se redirigen a `/api/errores`. |
+
+**Resultados de Pruebas**:
+
+Durante la simulación de escenarios, se obtuvieron las siguientes métricas que demuestran el cumplimiento de los QA críticos:
+
+- **Cola FIFO y sin pérdida de mensajes**: En el test `MqttBusColasTest`, se confirmó que al parar el broker, publicar 5 mensajes y arrancar el broker nuevamente, **las 5 llegaron al pipeline sin perderse**. Se verificó también que un mensaje huérfano del inbox se reprocesa al drenar y que un mensaje tóxico no bloquea la cola.
+
+- **Comportamiento ante fallas**:
+  - Al caer el broker MQTT: Las publicaciones se acumulan en la cola `salida` (outbox) y **no se pierden**. Al volver el broker, la cola baja a 0 y el tablero recupera el flujo solo.
+  - Al caer un servicio de procesamiento: Los mensajes se quedan `PENDIENTE` en su cola de entrada y no se descartan ni agotan reintentos innecesarios. Al reiniciar el servicio, se reprocesan los pendientes.
+  - **Cada sensor puede editar su frecuencia** de forma dinámica mediante la variable `SENSOR_FRECUENCIA_MS`. En las pruebas, se cambió la frecuencia de 5000 ms a 3600000 ms (1 hora) en el archivo `.env` y se reinició solo el contenedor backend (`docker compose up -d`), sin necesidad de reconstruir la imagen. El simulador comenzó a generar datos según la nueva frecuencia inmediatamente.
+
+- **Sensores con distintos formatos**: Se validó que los sensores pueden recibir y procesar distintos formatos de datos (temperatura, humedad, CO2, etc.) definidos en la base de datos. El validador recibe el `variable` del sensor y aplica el formato correspondiente, rechazando aquellos que no cumplen la estructura esperada (HDU-02/03).
+
+- **Cobertura de tests**: La suite de tests levantando Postgres y Mosquitto reales con Testcontainers obtuvo un **100% de éxito** en los tests de cola (`ColaServiceTest`, `MqttBusColasTest`) y en la aplicación completa (`MonitoringApplicationTests`), validando que el comportamiento en escenarios de fallo coincide con la documentación.
+
+---
+
 **Materia:** Arquitectura de Software · **Grupo:** Jonathan Guzman, Katherine Buitrago,
 Juan Jose Mosquera, Jovany Gutierrez Vergara · **Docente:** Juan Pablo Huertas Méndez
 Universidad Antonio Nariño — Ingeniería de Software, 2026
