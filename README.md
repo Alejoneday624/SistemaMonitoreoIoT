@@ -455,6 +455,183 @@ El proyecto final exige la sustentación de tu diseño.
   - **Render + Vercel (alternativa gratis)**: Frontend en Vercel, backend en Render,
     base de datos Render Postgres, broker EMQX Cloud Serverless.
 
+## Diagramas Arquitectónicos
+
+A continuación se presentan los diagramas UML que complementan la documentación estructural del proyecto:
+
+### Diagrama de Clases - Vista Lógica
+
+```plantuml
+@startuml "Vista Lógica - Sistema IoT Monitoreo"
+skinparam backgroundColor transparent
+skinparam monochrome true
+
+class SensorSimulator {
+    -String SENSOR_FRECUENCIA_MS
+    +void generarDatos()
+    +cargarCatálogoBD()
+}
+
+class MqttBus {
+    -String MQTT_URL
+    -int QoS
+    -boolean cleanSession
+    +publicar(String topic, String mensaje)
+    +suscribir(String topic, MessageListener listener)
+    +manejarReconexión()
+}
+
+class RecepcionService {
+    +validarFormatoHDU02(String payload)
+    +validarFormatoHDU03(String payload)
+    +redirigirErrores(String mensaje)
+}
+
+class ProcesamientoService {
+    +procesarMedición(Medición m)
+    +validarRangos(double valor, String variable)
+    +detectarDuplicados(Medición m)
+    +TODO_Ronda2_validación_umbrales
+}
+
+class Persistencia {
+    +EntityManager getEntityManager()
+    +guardarMedición(Medición m)
+    +actualizarColaMensajes(String estado)
+    +restricciónÚnica(sensor_id, fecha)
+}
+
+class API_Controller {
+    +PanelController()
+    +DemoController()
+    +SensoresController()
+    +AdminController()
+    +PanelApiController()
+}
+
+class MonitoreoService {
+    -long últimoHeartbeat
+    -Map<String, Long> timestampsSensores
+    +procesarHeartbeat()
+    +marcarInactivo(Sensor s)
+}
+
+class Seguridad_RBAC {
+    +Role ADMIN
+    +Role COMUNIDAD
+    +Role MANTENIMIENTO
+    +boolean verificarRol(Usuario u, String rolRequerido)
+}
+
+SensorSimulator --> Persistencia : usa para catálogo
+SensorSimulator --> MqttPub : publica datos
+MqttBus --> RecepcionService : valida mensajes
+MqttBus --> ProcesamientoService : encola procesamiento
+MqttBus --> MonitoreoService : actualiza estado
+ProcesamientoService --> Persistencia : guarda mediciones
+ProcesamientoService --> API_Controller : reporta estado
+API_Controller --> Segurança_RBAC : autoriza endpoints
+API_Controller --> MonitoreoService : consultas
+MonitoreoService --> SensorSimulator : consulta frecuencia
+
+@enduml
+```
+
+### Diagrama de Flujo de Mensajes - Vista de Procesos
+
+```plantuml
+@startuml "Vista de Procesos - Flujo MQTT y Colas"
+skinparam backgroundColor transparent
+skinparam monochrome true
+
+participant "Simulador" as Sim
+participant "Broker MQTT" as MQTT
+participant "MqttBus" as MB
+participant "RecepcionService" as RS
+participant "ProcesamientoService" as PS
+participant "PostgreSQL" as DB
+participant "Tablero" as TP
+
+Sim -> MQTT : publica campus/{sede}/{variable}/{sensorId}
+MQTT -> MB : PUBACK QoS 1
+MB -> RS : recibir mensaje
+RS -> PS : pasar a interno/validadas
+PS -> DB : guardar en cola_mensajes
+DB -> PS : confirmar
+PS -> MB : publicar interno/procesadas
+MB -> TP : enviar datos tablero
+
+note right: Cuando cae broker MQTT
+Sim -> MB : intenta publicar (fallo)
+MB -> DB : guardar en cola outbox (E9/E11)
+DB -> MB : mensaje encolado
+MB -> MB : mantener sesión persistente
+MB -> PS : al reconectar, entregar FIFO
+PS -> DB : vaciar cola outbox
+TP : recuperar flujo normal
+end note
+
+note right: Cuando cae ProcesamientoService
+RS -> DB : marcar mensaje PENDIENTE
+DB : persiste estado
+PS -> DB : al arrancar, reprocesar PENDIENTE
+RP : no se pierden mensajes
+end note
+
+@enduml
+```
+
+### Diagrama de Despliegue - Vista de Despliegue
+
+```plantuml
+@startuml "Vista de Despliegue - Arquitectura"
+skinparam backgroundColor transparent
+skinparam monochrome true
+
+container "Frontend" {
+    node "nginx :80" as Front
+    node "Vite React" as Client
+}
+container "Backend" {
+    node "Spring Boot Java 21" as Back
+    node "MqttBus" as Mqtt
+    node "Testcontainers" as Tests
+}
+container "DB" {
+    node "PostgreSQL 16" as Postgre
+    node "Volumen pgdata" as DataVol
+}
+container "Broker" {
+    node "Mosquitto 2" as Mosq
+    node "Volumen mosquitto-data" as MosqVol
+}
+
+Front -> Back : /api/ (proxy inverso)
+Back -> Postgre : JDBC (red interna)
+Back -> Mosquitto : MQTT (puerto 1883)
+Mosquitto -> DataVol : sesiones persistentes
+Postgre -> DataVol : volumen EBS persistente
+
+rectangle "AWS EC2 t2.micro" as EC2 {
+    EC2 -> Front : HTTP :80
+    EC2 -> Back : HTTP :8081
+    EC2 -> Postgre : Puerto 5432
+    EC2 -> Mosquitto : Puerto 1883
+}
+
+rectangle "Render + Vercel" as Nube {
+    node "Vercel" as Vercel
+    node "Render Backend" as Render
+    node "Render PostgreSQL" as RenderDB
+    node "EMQX Cloud" as EMQX
+    
+    Vercel -> Render : /api/* (rewrite)
+    Render -> RenderDB : PostgreSQL
+    Render -> EMQX : MQTT endpoint
+}
+@enduml
+```
+
 **Decisiones Clave**:
 
 1. **Arquitectura Pub/Sub con MQTT** sobre HTTP: Decidimos usar MQTT con QoS 1 y sesiones persistentes (`cleanSession=false`) para garantizar que ningún mensaje se pierda aunque un suscriptor se caiga (tácticas E9/E11). Esto permite que el broker encole mensajes y los entregue al reconectar, sobreviviendo a reinicios de componentes.
